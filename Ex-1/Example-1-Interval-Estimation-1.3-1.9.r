@@ -4,22 +4,23 @@
 ipw <- function(dat)
 {  
    N=length(dat$y) 
-    wt = dat$D/dat$ex
-    the  = sum(wt*dat$y)/N
-    gc = dat$y*wt - the 
-    Sig  = sum(gc^2)/N
-    c(the, Sig)
+   wt = dat$D/dat$ex
+   the  = sum(wt*dat$y)/N
+   gc = dat$y*wt - the 
+   Sig  = sum(gc^2)/N
+   c(the, Sig)
 }
 
 ###  stablized  IPW estimator    #############################################
 ###  Kang and Schafer, 2007, Statistics Science 
 ###        Hajek estimator          ##########################################
 sipw <- function(dat)
-{   wt = dat$D/dat$ex
-    the  = sum(wt*dat$y)/sum(wt)
-    gc = dat$y - the 
-    Sig  = sum(gc^2*wt^2)/sum(wt)
-    c(the, Sig)
+{  
+   wt = dat$D/dat$ex
+   the  = sum(wt*dat$y)/sum(wt)
+   gc = dat$y - the 
+   Sig  = sum(gc^2*wt^2)/sum(wt)
+   c(the, Sig)
 }
 
 
@@ -58,7 +59,8 @@ elw  <- function(dat)
 ####  Robust IPW estimator of    Ma and Wang, 2019, JASA   ##################### 
  
 ipw.mw<-function(dat)
-{ N = length(dat$D)
+{ 
+  N = length(dat$D)
   n = sum(dat$D) 
 
   fun1<-function(t, s){  2*n*t^s*mean(dat$ex<=t) - 1 }
@@ -98,24 +100,23 @@ ipw.mw<-function(dat)
 }
 
 ##############################################################################
-quan.low<-function(x){  quantile(x, 0.025) } 
-quan.up<-function(x){  quantile(x, 0.975) } 
-
-
-##############################################################################
 crit.cal<-function(dat, theta.est, B)
 {
+   quan.low<-function(x){  quantile(x, 0.025) } 
+   quan.up<-function(x){  quantile(x, 0.975) } 
+
    N = length(dat$ex)
    M = round(N/log(N))  
    stat.all = NULL
 
-   for(i in 1:B){
+   for(i in 1:B) {
        ind = sample.int(N, M, replace=FALSE)
        y.s  = dat$y[ind]
        ex.s = dat$ex[ind]
        D.s  = dat$D[ind]
        dat.s= list(y=y.s, ex=ex.s, D=D.s) 
 
+       # `stat` below means Wald statistic
        out.ipw=ipw(dat.s)
        stat.ipw  = sqrt(M)*(out.ipw[1]-theta.est[1])/sqrt(out.ipw[2])  
 
@@ -135,6 +136,7 @@ crit.cal<-function(dat, theta.est, B)
 
   stat.ipw  = stat.all[, 1]
   mean.ipw  = mean(stat.ipw)
+  # * Here we use `quantile` to derive the CI
   qu.ipw = quantile(abs(stat.ipw-mean.ipw), 0.95)
   low.ipw  = mean.ipw  - qu.ipw
   up.ipw   = mean.ipw  + qu.ipw
@@ -311,7 +313,7 @@ write.table(cov.all, 'e:/cov-all-ex1-39.txt')
 > end.time=proc.time()
 > cpu.time = end.time-start.time
 > print(cpu.time)
-    用户     系统     流逝 
+    锟矫伙拷     系统     锟斤拷锟斤拷 
 56317.39     7.06 56366.16 
 
 

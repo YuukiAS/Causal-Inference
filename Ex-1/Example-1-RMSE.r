@@ -113,6 +113,7 @@ ipw.trim<-function(dat)
  
 
 ##############################################################################    
+# One epoch in `simu.plot`
 simu.one<-function(nrep, gam, N, fun_index, coef)
 {
   dat0 = data.gen(gam, 200000, fun_index, coef)
@@ -335,7 +336,7 @@ print(cpu.time)
 > end.time=proc.time()
 > cpu.time = end.time-start.time
 > print(cpu.time)
-   ÓÃ»§    ÏµÍ³    Á÷ÊÅ 
+   ï¿½Ã»ï¿½    ÏµÍ³    ï¿½ï¿½ï¿½ï¿½ 
 1145.49    4.26 1180.48 
 > 
 

@@ -2,6 +2,7 @@
 #####################   IPW estimator    #####################################
 ipw <- function(dat)
 { 
+  # dat$ex is the propensity score P(D|L)
   sum(dat$D*dat$y/dat$ex)/length(dat$y) 
 }
 
@@ -123,7 +124,7 @@ simu.poisson<-function(nrep, popu, prop, theta)
   for( i in 1:nrep){ 
      # set.seed(i*10+5)
       d=rbinom(N, rep(1, N), prop)
-      if(sum(d)<=5) d[1:5]=1        ######防止poisson抽样中没有单元被抽中的情况
+      if(sum(d)<=5) d[1:5]=1  
       
       dat=list(y=popu, ex=prop, D=d)
       est    = c( ipw(dat), sipw(dat),  ipw.zzz(dat),  ipw.trim(dat), elw(dat)) 
@@ -323,7 +324,7 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
- 用户  系统  流逝 
+ 锟矫伙拷  系统  锟斤拷锟斤拷 
 46.67  1.48 48.23 
 
 
@@ -347,7 +348,7 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
- 用户  系统  流逝 
+ 锟矫伙拷  系统  锟斤拷锟斤拷 
 52.39  1.10 53.57 
 > 
 
@@ -372,5 +373,5 @@ print(cpu.time)
 > end.time=proc.time()
 > cpu.time = end.time-start.time
 > print(cpu.time)
- 用户  系统  流逝 
+ 锟矫伙拷  系统  锟斤拷锟斤拷 
 46.06  1.56 47.77 

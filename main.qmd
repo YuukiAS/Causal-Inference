@@ -1,0 +1,593 @@
+---
+title: "Biased-sample empirical likelihood weighting for missing data problems"
+author: "Mingcheng Hu"
+---
+
+```{r include = FALSE}
+library(cem) # Coarsened Exact Matching
+library(ggplot2)
+library(knitr)
+library(knitrProgressBar)
+
+set.seed(1234)
+```
+
+# Define Estimators
+
+## Point Estimators
+
+```{r label = "IPW estimators-point"}
+# IPW estimator
+ipw <- function(dat) {
+    sum(dat$D * dat$y / dat$ex) / length(dat$y)
+}
+
+# Stablized IPW estimator, Hajek estimator (SIPW)
+# Kang and Schafer (2007)
+sipw <- function(dat) {
+    sum(dat$D * dat$y / dat$ex) / sum(dat$D / dat$ex)
+}
+
+# Thresholding IPW estimator (ZZZ)
+# Zong, Zhu and Zou (2019)
+ipw.zzz <- function(dat) {
+    N <- length(dat$y)
+    index <- 1:N
+    tmp <- sort(dat$ex)
+    i <- max(which(tmp < 1 / (index + 1)))
+    crit <- tmp[i]
+
+    # * replace small probabilities with threshold `crit`
+    ex.star <- dat$ex
+    ex.star[which(dat$ex <= crit)] <- crit
+    sum(dat$D * dat$y / ex.star) / N
+}
+
+# Trimmed IPW estimator (CHIM)
+# Crump et al (2009)
+ipw.chim <- function(dat) {
+    tempfun <- function(a) {
+        u <- dat$ex * (1 - dat$ex)
+        v <- a * (1 - a)
+        # u>=v means that the propensity score is not too extreme
+        z <- (u >= v)
+        a + (2 * v * sum(z / u) > sum(z))
+    }
+    # optimize finds the value that minimizes the tempfun
+    a <- optimize(tempfun, lower = 1e-5, upper = 0.5, maximum = FALSE)$minimum
+
+    N <- length(dat$y)
+    y <- rep(dat$y, dat$D)
+    pw <- rep(dat$ex, dat$D)
+
+    # * exclude those observations with extreme propensity scores
+    ind <- (pw > a & pw < 1 - a)
+    y.star <- y[ind]
+    pw.star <- pw[ind]
+    sum(y.star / pw.star) / sum(1 / pw.star)
+}
+
+# Robust IPW (MW1, MW2)
+# An inference procedure that is robust not only to small probability weights, but also to a wide range of trimming threshold choices
+# Wang and Ma (2017) https://www-tandfonline-com.libproxy.lib.unc.edu/doi/epdf/10.1080/01621459.2019.1660173
+ipw.trim <- function(dat) {
+    N <- length(dat$D)
+    n <- sum(dat$D)
+
+    fun1 <- function(t, s) {
+        2 * n * t^s * mean(dat$ex <= t) - 1
+    }
+    bn1 <- uniroot(fun1, c(0, 1), s = 1)$root
+    bn2 <- uniroot(fun1, c(0, 1), s = 2)$root
+
+    fun2 <- function(t) {
+        n * t^5 * mean(dat$ex <= t) - 1
+    }
+    hn <- uniroot(fun2, c(0, 1))$root
+
+    yy <- rep(dat$y, dat$D)
+    pw <- rep(dat$ex, dat$D)
+    xx <- cbind(rep(1, n), pw) # design matrix
+    ww <- (pw < hn)
+    xx1 <- cbind(ww, ww * pw)
+    bet <- MASS::ginv(t(xx1) %*% xx) %*% t(xx1) %*% yy # generalized inverse of matrix
+    xx.all <- cbind(rep(1, N), dat$ex)
+
+    Bnb1 <- -mean((xx.all %*% bet) * (dat$ex < bn1)) # bias correction for trimming at bn1
+    ipw.trim1 <- mean(yy * (pw >= bn1) / pw) * n / N
+    ipw.bc1 <- ipw.trim1 - Bnb1
+
+    Bnb2 <- -mean((xx.all %*% bet) * (dat$ex < bn2))
+    ipw.trim2 <- mean(yy * (pw >= bn2) / pw) * n / N
+    ipw.bc2 <- ipw.trim2 - Bnb2
+
+    c(ipw.bc1, ipw.bc2)
+}
+```
+
+```{r label = "ELW estimator-point"}
+# Ref Algorithm 1 in paper
+elw <- function(dat, eeps = sqrt(.Machine$double.eps)) {
+    y <- rep(dat$y, dat$D)
+    pw <- rep(dat$ex, dat$D)
+    N <- length(dat$y)
+
+    # step 1
+    n <- sum(dat$D)
+
+    xi <- n / N + (1 - n / N) * pw
+
+    low <- min(pw)
+    up <- min(xi) - eeps # right side is open
+
+    # step 2
+    fun <- function(alpha) {
+        sum((pw - alpha) / (xi - alpha))
+    }
+    # By intermediate value theorem
+    alpha <- uniroot(fun, interval = c(low, up), tol = 1e-8)$root
+    lambda <- (N / n - 1) / (1 - alpha)
+
+    # step 3
+    tmp <- 1 + lambda * (pw - alpha)
+    prob.el <- 1 / (n * tmp)
+
+    # step 4
+    # * Here g(Z,theta)=Y(1)-theta, D_i excludes those with missing Y(1)
+    sum(y * prob.el)
+}
+```
+
+
+## Confidence Intervals
+
+Here `Sig` is the asymptotic variance of estimators: $\sqrt{N}(\hat{\theta}-\theta_0)\xrightarrow{d}N(0,\Sigma)$.
+
+```{r label = "IPW estimators-interval"}
+ipw_ci <- function(dat) {
+    N <- length(dat$y)
+    wt <- dat$D / dat$ex
+    the <- sum(wt * dat$y) / N # theta
+    gc <- dat$y * wt - the # note that gc is a vector
+    Sig <- sum(gc^2) / N # asymptotic variance
+    c(the, Sig)
+}
+
+sipw_ci <- function(dat) {
+    wt <- dat$D / dat$ex
+    the <- sum(wt * dat$y) / sum(wt)
+    gc <- dat$y - the
+    Sig <- sum(gc^2 * wt^2) / sum(wt)
+    c(the, Sig)
+}
+
+ipw.mw_ci <- function(dat) {
+    N <- length(dat$D)
+    n <- sum(dat$D)
+
+    fun1 <- function(t, s) {
+        2 * n * t^s * mean(dat$ex <= t) - 1
+    }
+    bn1 <- uniroot(fun1, c(0, 1), s = 1)$root
+    bn2 <- uniroot(fun1, c(0, 1), s = 2)$root
+
+    fun2 <- function(t) {
+        n * t^5 * mean(dat$ex <= t) - 1
+    }
+    hn <- uniroot(fun2, c(0, 1))$root
+
+    yy <- rep(dat$y, dat$D)
+    pw <- rep(dat$ex, dat$D)
+    xx <- cbind(rep(1, n), pw)
+    ww <- (pw < hn)
+    xx1 <- cbind(ww, ww * pw)
+    bet <- MASS::ginv(t(xx1) %*% xx) %*% t(xx1) %*% yy
+    xx.all <- cbind(rep(1, N), dat$ex)
+
+
+    if (sum(dat$D == 1 & dat$ex >= hn) <= 2) {
+        Bnb1 <- Bnb2 <- 0
+    } else {
+        Bnb1 <- -mean((xx.all %*% bet) * (dat$ex < bn1))
+        Bnb2 <- -mean((xx.all %*% bet) * (dat$ex < bn2))
+    }
+
+    ipw.trim1 <- mean(yy * (pw >= bn1) / pw) * n / N
+    theta.mw1 <- ipw.trim1 - Bnb1
+    tmp1 <- sum((yy * (pw >= bn1) / pw - theta.mw1)^2)
+    Sn.mw1 <- (tmp1 + (N - n) * theta.mw1^2) / (N - 1)
+
+    ipw.trim2 <- mean(yy * (pw >= bn2) / pw) * n / N
+    theta.mw2 <- ipw.trim2 - Bnb2
+    tmp2 <- sum((yy * (pw >= bn2) / pw - theta.mw2)^2)
+    Sn.mw2 <- (tmp2 + (N - n) * theta.mw2^2) / (N - 1)
+
+    c(theta.mw1, theta.mw2, Sn.mw1, Sn.mw2)
+}
+```
+
+**Wald-type** CI  `ELW_an` : When propensity score is **known**,  we propose to estimate $\Sigma_{ELW}=K^{-1}\frac{B_{gg}-B_{g1}^{\otimes 2}}{B_{11}-1}(K^{-1})^T$ with the estimator $\hat{\Sigma}_{ELW}=\hat{K}^{-1}\frac{\hat{B}_{gg}-\hat{B}_{g1}^{\otimes 2}}{\hat{B}_{11}-1}(\hat{K}^{-1})^T$.
+
+The Wald-type CI requires $B_{11}=E[\{\pi(Z)\}^{-1}]$ and $B_{gg}$ are finite and well-defined. If either of them is violated, the CI may not have the promised coverage probability. We need to construct CI by **resampling** then `ELW_re`.
+
+```{r label = "ELW estimators-interval"}
+elw_ci <- function(dat, eeps = sqrt(.Machine$double.eps)) {
+    y <- rep(dat$y, dat$D)
+    pw <- rep(dat$ex, dat$D)
+    N <- length(dat$y)
+
+    n <- sum(dat$D)
+    xi <- n / N + (1 - n / N) * pw
+    low <- min(pw)
+    up <- min(xi) - eeps
+
+    fun <- function(alpha) {
+        sum((pw - alpha) / (xi - alpha))
+    }
+    alpha <- uniroot(fun, interval = c(low, up), tol = 1e-8)$root
+    lambda <- (N / n - 1) / (1 - alpha)
+    tmp <- 1 + lambda * (pw - alpha)
+    prob.el <- 1 / (n * tmp)
+
+    theta.elw <- sum(y * prob.el)
+
+    # Ref p74 top
+    B11 <- N * sum(prob.el^2)
+    Bg1 <- N * sum(prob.el^2 * y)
+    Bgg <- N * sum(prob.el^2 * y^2)
+
+    Sig <- Bgg - theta.elw^2 - (Bg1 - theta.elw)^2 / (B11 - 1)
+
+    c(theta.elw, Sig)
+}
+```
+
+
+```{r}
+#' Calculate Confidence Intervals using nonparameteric Bootstrap
+#'
+#' @param dat A list containing the data.
+#' @param theta.est A numeric vector of estimated theta values for the different methods.
+#' @param B An integer specifying the number of bootstrap samples.
+crit.cal<-function(dat, theta.est, B)
+{
+   quan.low<-function(x){  quantile(x, 0.025) } 
+   quan.up<-function(x){  quantile(x, 0.975) } 
+
+   N = length(dat$ex)
+   M = round(N/log(N))  
+   stat.all = NULL
+
+   for(i in 1:B) {
+       ind = sample.int(N, M, replace=FALSE)
+       y.s  = dat$y[ind]
+       ex.s = dat$ex[ind]
+       D.s  = dat$D[ind]
+       dat.s= list(y=y.s, ex=ex.s, D=D.s) 
+
+       out.ipw=ipw_ci(dat.s)
+       stat.ipw  = sqrt(M)*(out.ipw[1]-theta.est[1])/sqrt(out.ipw[2])  
+
+       out.sipw=sipw_ci(dat.s)
+       stat.sipw  = sqrt(M)*(out.sipw[1]-theta.est[2])/sqrt(out.sipw[2])  
+ 
+       out.mw = ipw.mw_ci(dat.s) 
+       stat.mw1 = sqrt(M)*(out.mw[1]-theta.est[3])/sqrt(out.mw[3])
+       stat.mw2 = sqrt(M)*(out.mw[2]-theta.est[4])/sqrt(out.mw[4]) 
+
+       out.elw = elw_ci(dat.s)    
+       stat.elw  = sqrt(M)*(out.elw[1]-theta.est[5])/sqrt(out.elw[2])  
+
+       stat.all=rbind(stat.all, c(stat.ipw, stat.sipw, stat.mw1, stat.mw2, stat.elw))
+   }
+
+  # combine all lower and upper bounds
+  stat.ipw  = stat.all[, 1]
+  mean.ipw  = mean(stat.ipw)
+  qu.ipw = quantile(abs(stat.ipw-mean.ipw), 0.95) # nonparameteric Bootstrap
+  low.ipw  = mean.ipw  - qu.ipw
+  up.ipw   = mean.ipw  + qu.ipw
+
+  stat.sipw  = stat.all[, 2]
+  mean.sipw  = mean(stat.sipw)
+  qu.sipw = quantile(abs(stat.sipw-mean.sipw), 0.95)
+  low.sipw  = mean.sipw  - qu.sipw
+  up.sipw   = mean.sipw  + qu.sipw
+
+  stat.elw  = stat.all[, 5]
+  mean.elw  = mean(stat.elw)
+  qu.elw = quantile(abs(stat.elw-mean.elw), 0.95)
+  low.elw   = mean.elw  - qu.elw
+  up.elw    = mean.elw  + qu.elw
+   
+  # apply() for MW1, MW2
+  crit.low = c(low.ipw, low.sipw, apply(stat.all[, 3:4], 2, quan.low), low.elw )
+  crit.up  = c(up.ipw, up.sipw, apply(stat.all[, 3:4], 2, quan.up),  up.elw) 
+  c(crit.low, crit.up) 
+}
+```
+
+# Example 1
+
+
+Instead of generating $X$, we generate the propensity score $\pi(X)$ from $\mathbb{P}(\pi(X) \le u) = u^{\gamma-1} (0 \le u \le 1)$ with $\gamma = 1.5$ or 2.5. Given $\pi(X)$, we generate $Y$ from $Y = \mu(\pi(X)) + c \cdot (\eta - 4) / \sqrt{8}$, where $c = 1$ or 0.1, and $\eta \sim \chi^2_4$, and the missingness status $D$ of $Y$ follows the Bernoulli distribution with success probability $\pi(X)$. Four choices of $\mu(t)$ are considered: $\mu(t) = \cos(2\pi t)$ (Model 1), $\mu(t) = 1 - t$ (Model 2), $\mu(t) = \cos(2\pi t) + 5$ (Model 3), and $\mu(t) = 6 - t$ (Model 4). The full data size is $N = 2000$, and the parameter of interest is $\theta = \mathbb{E}(Y)$.
+
+**Note that the propensity score is known here**
+
+## Point Estimates
+
+```{r label = "Example1: Setup"}
+#' Generate data for example 1
+#' @param gam Gamma: 1.5 or 2.5
+#' @param fun_index Model: 1 to 4
+#' @param coef c: 1 or 0.1
+data.gen <- function(gam, N, fun_index, coef) {
+    ex <- (runif(N))^(1 / (gam - 1)) # propensity score
+    eta <- (rchisq(N, 4) - 4) / sqrt(8)
+    D <- rbinom(N, 1, ex)
+
+    # Choose from one of the four models according to `fun_index`
+    reg <- (fun_index == 1) * cos(2 * pi * ex) + (fun_index == 2) * (1 - ex) +
+        (fun_index == 3) * (5 + cos(2 * pi * ex)) + (fun_index == 4) * (1 - ex + 5)
+    y <- reg + eta * coef
+
+    dat <- list(y = y, ex = ex, D = D)
+    return(dat)
+}
+
+
+simu.plot <- function(nrep, gam, N, fun_index, coef, boxplot = FALSE) {
+    dat0 <- data.gen(gam, 200000, fun_index, coef)
+    my <- mean(dat0$y)
+    result <- NULL
+
+    for (i in 1:nrep) {
+        dat <- data.gen(gam, N, fun_index, coef)
+        est <- c(
+            ipw(dat), sipw(dat), ipw.zzz(dat),
+            ipw.chim(dat), ipw.trim(dat), elw(dat)
+        )
+        result <- rbind(result, est)
+    }
+
+    ############          boxplot     ############################
+    xnm <- c("SIPW", "ZZZ", "CHIM", "MW1", "MW2", "ELW")
+    if (boxplot) {
+        gam1 <- gam * 10
+        coef1 <- 10 * coef
+        txt <- paste("N=", N, "-Model=", fun_index, "-gamma=",
+            gam1, "-c=", coef1,
+            sep = ""
+        )
+        file <- paste("/work/users/y/u/yuukias/Causal-Inference/Ex-1/out/", txt, ".pdf", sep = "")
+        pdf(file)
+        boxplot(result[, -1],
+            xaxt = "n", xlab = "",
+            main = paste("N=", N, ",  Model=", fun_index, ", gamma=", gam, ",  c=", coef, sep = "")
+        )
+        abline(h = my)
+        axis(1, 1:6, labels = xnm)
+        dev.off()
+    }
+    ##############################################################
+
+    rmse <- sqrt(N * apply((result - my)^2, 2, mean))
+    rmse <- c(N, gam, coef, fun_index, rmse)
+    rmse <- matrix(round(rmse, 4), 1)
+    colnames(rmse) <- c("N", "gamma", "c", "Model", "IPW", xnm)
+    # print(rmse)
+    return(rmse)
+}
+
+
+simu.cov <- function(nrep, gam, N, fun_index, coef, my, B) {
+    result <- NULL
+
+    for (i in 1:nrep) {
+        dat <- data.gen(gam, N, fun_index, coef)
+
+        out.ipw <- ipw_ci(dat)
+        theta.ipw <- out.ipw[1]
+        # Wald statistic
+        stat.ipw <- sqrt(N) * (theta.ipw - my) / sqrt(out.ipw[2])
+        # Wald statistic (absolute version)
+        st.ipw <- sqrt(N) * abs(theta.ipw - my) / sqrt(out.ipw[2])
+
+        out.sipw <- sipw_ci(dat)
+        theta.sipw <- out.sipw[1]
+        stat.sipw <- sqrt(N) * (theta.sipw - my) / sqrt(out.sipw[2])
+        st.sipw <- sqrt(N) * abs(theta.sipw - my) / sqrt(out.sipw[2])
+
+        out.mw <- ipw.mw_ci(dat)
+        theta.mw1 <- out.mw[1]
+        theta.mw2 <- out.mw[2]
+
+        stat.mw1 <- sqrt(N) * (theta.mw1 - my) / sqrt(out.mw[3])
+        stat.mw2 <- sqrt(N) * (theta.mw2 - my) / sqrt(out.mw[4])
+
+        out.elw <- elw_ci(dat)
+        theta.elw <- out.elw[1]
+        stat.elw <- sqrt(N) * (theta.elw - my) / sqrt(out.elw[2])
+
+        theta.est <- c(theta.ipw, theta.sipw, theta.mw1, theta.mw2, theta.elw)
+        stat <- c(stat.ipw, stat.sipw, stat.mw1, stat.mw2, stat.elw)  # a vector of length 5
+
+        crit <- crit.cal(dat, theta.est, B)  # return a vector of length 5+5=10
+        index <- (stat - crit[1:5] > 0) * (stat - crit[6:10] < 0)  # whether lies in the CI
+
+        st.elw <- sqrt(N) * abs(theta.elw - my) / sqrt(out.elw[2])
+        # * add IPW.an, SIPW.an, ELW.an into index vector
+        index <- c(st.ipw < 1.96, index[1], st.sipw < 1.96, index[2:4], st.elw < 1.96, index[5])
+
+        wd.ipw <- 2 * 1.96 * sqrt(out.ipw[2]) / sqrt(N)
+        wd.sipw <- 2 * 1.96 * sqrt(out.sipw[2]) / sqrt(N)
+        wd.elw <- 2 * 1.96 * sqrt(out.elw[2]) / sqrt(N)
+        tmp <- (crit[6:10] - crit[1:5]) * 1.96 * sqrt(c(out.ipw[2], out.sipw[2], out.mw[3], out.mw[4], out.elw[2])) / sqrt(N)
+
+        # * Add lengths of CI to the result
+        width <- c(wd.ipw, tmp[1], wd.sipw, tmp[2:4], wd.elw, tmp[5])
+
+        # rescale to 100 so that it is easier to compare with 95
+        result <- rbind(result, c(index * 100, width))
+        # print(round(c(gam, coef, fun_index, i, stat, crit), 2))
+    }
+
+    cvrg <- round(apply(result, 2, mean), 4)
+
+
+    out <- c(N, gam, coef, fun_index, cvrg)
+    out <- matrix(out, 1)
+    colnames(out) <- c(
+        "N", "gamma", "c", "Model", "IPW.an", "IPW.re", "SIPW.an", "SIPW.re", "MW1", "MW2",
+        "ELW.an", "ELW.re", "IPW.an", "IPW.re", "SIPW.an", "SIPW.re", "MW1", "MW2", "ELW.an", "ELW.re"
+    )
+    return(out)
+}
+```
+
+```{r label = "Example1: Point Estimators", cache = TRUE}
+nrep <- 5000
+NN <- c(50, 500, 2000) # size of data
+gamm <- c(1.3, 1.5, 1.9, 2.5)
+cff <- c(1, 0.1)
+
+rmse.all <- NULL
+pb <- progress_estimated(3 * 4 * 2)
+for (i in 1:3) {
+    N <- NN[i]
+    for (k in 1:4) {
+        gam <- gamm[k]
+        for (a in 1:2) {
+            coef <- cff[a]
+            update_progress(pb)
+            for (j in 1:4) {
+                fun_index <- j
+                rmse <- simu.plot(nrep, gam, N, fun_index, coef)
+                rmse.all <- rbind(rmse.all, rmse)
+            }
+        }
+    }
+}
+
+# Ratio of RMSE for MW1 vs. ELW
+ratio <- rmse.all[, 9] / rmse.all[, 11]
+result <- round(cbind(rmse.all, ratio), 2)
+result
+```
+
+It can be seen that IPW results have very high RMSEs.
+
+In all cases, the ELW estimator either has smallest RMSE or its RMSE is very close to the smallest of seven estimators.
+
+The advantage of ELW over the rest six estimators is remarkably obvious in the scenarios with $c=0.1$ under model 3 and 4.
+
+## Confidence Intervals
+
+```{r label = "Example1: Confidence Intervals", cache = TRUE}
+# nrep <- 5000
+nrep <- 200
+NN <- c(2000)
+gamm <- c(1.3, 1.9)
+cff <- c(1, 0.1)
+B <- 1000
+
+cov.all <- NULL
+pb <- progress_estimated(1*2*2*4)
+for (i in 1:1) {
+    N <- NN[i]
+    for (k in 1:2) {
+        gam <- gamm[k]
+        for (a in 1:2) {
+            coef <- cff[a]
+            for (j in 1:4) {
+                fun_index <- j
+                dat0 <- data.gen(gam, 200000, fun_index, coef)
+                my <- mean(dat0$y)
+                cvrg <- simu.cov(nrep, gam, N, fun_index, coef, my, B)
+                update_progress(pb)
+                cov.all <- rbind(cov.all, cvrg)
+                # print(cov.all)
+            }
+        }
+    }
+}
+
+cov.all
+```
+
+When $\gamma=1.3$, all intervals have severe under-coverages in almost all cases (`<95`). However, `ELW-re` has the best overall performance whereas `MW1-re` and `MW2-re` have unstable performance under different settings. 
+
+When $\gamma=1.9$, the `IPW-re`, `SIPW-re` and `ELW-re` intervals are all desirable, while `MW1` and `MW2-re` still have much under-coverages.
+
+# LaLonde LLvsPSID Dataset
+
+## Import Data
+
+The LLvsPSID is the Lalonde set of treated units vs. panel study of income dynamics (PSID) control individuals. The dataset consist of 2787 observations (297 from treated units and 2490 from control units).
+
+```{r}
+# The Lalonde set of treated units versus PSID (Panel Study of Income Dynamics) control individuals
+data(LLvsPSID) # load dataset
+head(LLvsPSID)
+```
+
+Let $Y=re78/10000$ be the response, $D=treated$. The parameter of interest is $\theta=E[Y(1)]$. We first estimate the propensity scores by fitting a linear logistic regression model of treatemnt $D$ on the remaining eight variables.
+
+
+
+Although ELW method works for missing data problems where data are i.i.d distributed, theorem 2.1 does not hold any longer under general unequal probability samplings without replacement (UPS-WOR) or under unequal probability sampling with replacement (UPS-WR).
+
+## Fit the Propensity Score
+
+
+```{r label = "Real Data: Propensity Score Model"}
+# re74: real earnings in 1974
+# re75: real earnings in 1975
+# re78: real earnings in 1978
+# treated: training program
+LLvsPSID$y <- LLvsPSID$re78 / 10000
+LLvsPSID$D <- LLvsPSID$treated
+
+# Fit a logistic regression model
+psmodel <- glm(
+    as.factor(D) ~ age + married + education + nodegree +
+        black + hispanic + re74 + re75,
+    data = LLvsPSID, family = binomial
+)
+
+LLvsPSID$ex <- psmodel$fitted.values
+
+ggplot(LLvsPSID, aes(x = y, fill = as.factor(D))) +
+    geom_histogram(alpha = 0.5, color = "black") +
+    labs(x = "Y", y = "Frequency", title = "Histogram of Y by D") +
+    scale_fill_discrete(labels = c("Control", "Treated"))
+
+ggplot(LLvsPSID, aes(x = ex, fill = as.factor(D))) +
+    geom_histogram(alpha = 0.5, color = "black") +
+    labs(x = "Propensity Score", y = "Frequency", title = "Histogram of Propensity Score by D") +
+    scale_fill_discrete(labels = c("Control", "Treated"))
+```
+
+## Obtain Estimates
+
+```{r label = "Real Data: Point Estimate"}
+kable(
+    data.frame(
+        IPW = ipw(LLvsPSID),
+        SIPW = sipw(LLvsPSID),
+        # ZZZ = ipw.zzz(LLvsPSID),
+        # CHIM = ipw.chim(LLvsPSID),
+        IPW1 = ipw.trim(LLvsPSID)[1],
+        IPW2 = ipw.trim(LLvsPSID)[2],
+        ELW = elw(LLvsPSID)
+    )
+)
+```
+
+
+## Extension to Unequal Probability Sampling 
+
+### UPS-WOR
+
+
+### UPS-WR
