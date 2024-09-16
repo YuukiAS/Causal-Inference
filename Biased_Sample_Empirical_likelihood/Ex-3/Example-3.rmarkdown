@@ -1,0 +1,193 @@
+---
+title: Section 8.3 Simulation results when data were generated from Example 3
+author: Mingcheng Hu
+---
+
+
+
+(Missing data with estimated propensity scores) Let $X$ follow the exponential distribution with rate $\lambda = 1$ or $1/2$. Given $X = x$, we generate $D$ from the Bernoulli distribution with success probability $\pi(x) = \frac{e^{-x}}{1 + e^{-x}}$, and generate $Y$ from $Y = \mu(x) + \epsilon \times \sigma$, where $\epsilon \sim N(0, 1)$ and $\sigma = 1$ or $1/4$. Four choices of $\mu(x)$ are considered: 
+
++ $\mu(x) = \log(1 + x)$ (Model 1)
+
++ $\mu(x) = \frac{(x-1)^2 + (x-3)^2}{4}$ (Model 2)
+
++ $\mu(x) = 5 + \log(1 + x)$ (Model 3)
+
++ $\mu(x) = 5 + \frac{(x-1)^2 + (x-3)^2}{4}$ (Model 4)
+
+The parameter of interest is $\theta = \mathbb{E}(Y)$.
+
+
+
+```{r}
+ipw <- function(dat)
+{ 
+  return(sum(dat$D*dat$y/dat$ex)/length(dat$y))
+}
+
+
+sipw <- function(dat)
+{  
+  return(sum(dat$D*dat$y/dat$ex)/sum(dat$D/dat$ex))
+}
+
+ipw.zzz <- function(dat)
+{ 
+    N   = length(dat$y)
+    index = 1:N
+    tmp = sort( dat$ex )
+    i = max( which( tmp < 1/(index+1) ) ) 
+    crit = tmp[i] 
+    
+    ex.star = dat$ex  
+    ex.star[which(dat$ex <=crit)] = crit
+    return(sum(dat$D*dat$y/ex.star)/N)
+}
+
+ipw.chim <- function(dat)
+{ 
+    tempfun <- function(a) { 
+        u = dat$ex*(1- dat$ex)
+        v = a*(1-a)  
+        z = (u>=v)  
+        a + (2*v*sum( z/u )  >  sum(z) )
+    }   
+    a =  optimize(tempfun, lower=1e-5, upper=0.5, maximum=FALSE)$minimum  
+
+    N   = length(dat$y)
+    y   = rep(dat$y,  dat$D)
+    pw  = rep(dat$ex, dat$D) 
+
+    ind = ( pw>a & pw< 1-a)
+    y.star  = y[ind]
+    pw.star = pw[ind]
+    return(sum(y.star/pw.star)/sum(1/pw.star))
+}
+
+
+elw  <- function(dat)
+{ 
+    y   = rep(dat$y, dat$D)
+    pw  = rep(dat$ex, dat$D) 
+    N   = length(dat$y) 
+
+    eeps =sqrt(.Machine$double.eps)    # root of machine precision
+
+    n   = sum(dat$D) 
+    xi  = n/N + (1-n/N)*pw
+    low = min(pw);   
+    up  = min(xi)-eeps    
+
+    fun     <- function(alpha){  sum((pw-alpha)/(xi-alpha)) }
+    alpha   <- uniroot(fun, interval=c(low, up), tol=eeps)$root
+    lambda  =  (N/n-1)/(1-alpha)      
+    tmp     =  1+lambda*(pw-alpha) 
+    prob.el =  1/(n*tmp) 
+   
+    return(sum(y*prob.el))
+ }
+
+ipw.trim<-function(dat)
+{ N = length(dat$D)
+  n = sum(dat$D) 
+
+  fun1<-function(t, s){  2*n*t^s*mean(dat$ex<=t) - 1 }
+  bn1=uniroot(fun1, c(0, 1), s=1)$root 
+  bn2=uniroot(fun1, c(0, 1), s=2)$root 
+
+  fun2<-function(t){  n*t^5*mean(dat$ex<=t) - 1  }
+  hn=uniroot(fun2, c(0, 1))$root  
+
+  yy = rep(dat$y, dat$D)
+  pw = rep(dat$ex,dat$D)
+  xx = cbind(rep(1,n),  pw)
+  ww = (pw<hn)
+  xx1 = cbind(ww,  ww*pw)
+  bet = MASS::ginv(t(xx1)%*%xx)%*%t(xx1)%*%yy 
+  xx.all = cbind(rep(1, N), dat$ex)
+
+  Bnb1 =  - mean( (xx.all%*%bet)*(dat$ex<bn1) )
+  ipw.trim1 =  mean(yy*(pw >= bn1)/pw) *n/N            
+  ipw.bc1 = ipw.trim1-Bnb1 
+
+  Bnb2 =  - mean( (xx.all%*%bet)*(dat$ex<bn2) )
+  ipw.trim2 =  mean(yy*(pw >= bn2)/pw)*n/N
+  ipw.bc2 = ipw.trim2 -Bnb2
+
+  return(c(ipw.bc1, ipw.bc2))
+}
+```
+
+```{r}
+data.gen <- function(gam, N, fun_index, coef)
+{
+   x  = rexp(N, gam)     
+   ex = plogis(-x)  # * true propensity score that needs to be estimated
+   eta = rnorm(N)
+   # Determine model for mu(x) based on fun_index  
+   reg = (fun_index==1)*log(1+x) + (fun_index==2)*((x-1)^2/4+(x-3)^2/4) + 
+           (fun_index==3)*(5+ log(1+x)) + (fun_index==4)*(5+(x-1)^2/4+(x-3)^2/4)
+   y =  reg + eta*coef    
+   D = rbinom(N, 1, ex)
+   dat = list(y=y, x=x, D=D)
+   return(dat)
+}
+
+# define The main simulation function that generates data and estimates the parameter of interest
+simu.one <- function(nrep, gam, N, fun_index, coef)
+{
+  datt0 = data.gen(gam, 200000, fun_index, coef)
+  my = mean(datt0$y) 
+  result = NULL
+  for(i in 1:nrep){ 
+      # set.seed(i*10+5)
+
+      # Generate data
+      dat0 = data.gen(gam, N, fun_index, coef) 
+
+      # * We estimate the propensity score using a linear logistic model
+      obj= glm(dat0$D~dat0$x, family=binomial(link="logit"))
+      ex = obj$fitted.values
+
+      dat = list(y=dat0$y, D=dat0$D, ex=ex, x=dat0$x) 
+      est = c(    ipw(dat), sipw(dat), ipw.zzz(dat), 
+                  ipw.chim(dat), ipw.trim(dat),  elw(dat) )
+      result = rbind(result, est)
+   }   
+  rmse  = sqrt( apply( (result-my)^2, 2, mean))  
+  rmse= sqrt(N)*rmse 
+} 
+```
+
+```{r label = "Simulation", cache = TRUE}
+set.seed(1234)
+
+
+nrep = 5000 
+NN = c(500, 2000)  # The full data size is 500 or 2000
+gamm = c(1, 1/2)
+cff = c(1, 1/4)  
+
+rmse.all = NULL
+for(i in 1:2){   ###  3
+   N = NN[i]
+   for(k in 1:2){   ### 4
+      gam = gamm[k] 
+      for(a in 1:2){
+        coef = cff[a]
+        for(j in 1:4){  ## 4
+            fun_index = j 
+            rmse0 = simu.one(nrep, gam, N, fun_index, coef)
+            rmse = c(N, gam, coef, fun_index, rmse0)
+            print(round(rmse, 2))
+            rmse.all = rbind(rmse.all, rmse)
+         }
+      }
+   }
+}
+
+```
+
+```{r}
+rmse.all
+```

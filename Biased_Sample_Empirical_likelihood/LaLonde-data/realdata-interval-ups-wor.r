@@ -73,8 +73,8 @@ simu.pivotal<-function(nrep, popu, prop, theta)
   N = length(popu)
   n= round(sum(prop)) 
   for( i in 1:nrep){  
-      pik=inclusionprobabilities(prop, n)
-      index =  UPpivotal(pik)        
+      pik= sampling::inclusionprobabilities(prop, n)  # each subject has different prop, result is deterministic
+      index =  sampling::UPpivotal(pik)        
       dat=list(y=popu, ex=prop, D=(index>0.5))
 
       out.ipw=ipw(dat) 
@@ -164,7 +164,7 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
-  用户   系统   流逝 
+  锟矫伙拷   系统   锟斤拷锟斤拷 
 181.52   2.09 187.51 
 > 
 
@@ -180,7 +180,7 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
-  用户   系统   流逝 
+  锟矫伙拷   系统   锟斤拷锟斤拷 
 179.22   2.14 187.09 
 
  

@@ -8,7 +8,7 @@ ipw <- function(dat)
     wt = dat$D/dat$ex
     the  = sum(wt*dat$y)/N 
     Sig  = alp*sum(dat$y^2*wt^2)/N -  the^2 
-    c(the, Sig) 
+    c(the, Sig)
 }
 
 ###  stablized  IPW estimator    #############################################
@@ -64,7 +64,7 @@ elw  <- function(dat)
  }
 
 
-#####   Poisson sampling
+#####   PPS sampling
 simu.pps<-function(nrep, popu, prop, n, theta)
 { 
    result=NULL
@@ -106,6 +106,7 @@ eeps=sqrt(.Machine$double.eps)   #### root of machine precision
 library(cem)
 data(LLvsPSID)
 dat.raw  = LLvsPSID
+# We just use two columns in the data
 y0 = dat.raw$re78
 x0 = dat.raw$re75
 ind = (x0>0)
@@ -154,7 +155,7 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
-用户 系统 流逝 
+锟矫伙拷 系统 锟斤拷锟斤拷 
 7.82 0.69 8.60 
 
 
@@ -167,7 +168,7 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
-用户 系统 流逝 
+锟矫伙拷 系统 锟斤拷锟斤拷 
 7.29 0.66 7.95 
 
 

@@ -134,6 +134,8 @@ simu.one<-function(nrep, gam, N, fun_index, coef)
 ####    Generate data 
 data.gen<- function(gam, N, fun_index, coef)
 {
+   # CDF: F(u)=P(ex<=u)=u^(gamma-1)  -> F^{-1}(v)=v^(1/(gamma-1))
+   # * We use inverse integral transform to sample the propensity score!
    ex  = (runif(N))^(1/(gam-1))
    eta = (rchisq(N, 4)-4)/sqrt(8)  
    reg = (fun_index==1)*cos(2*pi*ex) + (fun_index==2)*(1-ex) + 

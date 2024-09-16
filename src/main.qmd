@@ -1,0 +1,1052 @@
+---
+title: 'Double Robust version of ELW'
+author: 'Mingcheng Hu'
+---
+
+```{r include = FALSE}
+library(MASS)
+library(knitr)
+library(knitrProgressBar)
+
+set.seed(1234)
+```
+
+```{r label = "Constants"}
+nrep = 2000
+nrep_small = 100
+
+N_large = 100000
+N_normal = 20000
+N_small = 5000
+```
+
+```{r label = "Utility Functions"}
+expit = function(x) 1/(1+exp(-x))
+logit = function(p) log(p/(1-p))
+```
+
+# Demystifying Double Robustness: A Comparison of Alternative Strategies for Estimating a Population Mean from Incomplete Data
+
+```{r}
+data.gen = function(N) {
+    z1 = rnorm(N)
+    z2 = rnorm(N)
+    z3 = rnorm(N)
+    z4 = rnorm(N)
+    eps = rnorm(N)
+    y = 210 + 27.4*z1 + 13.7*z2 + 13.7*z3 + 13.7*z4 + eps
+    prop = expit(-z1 + 0.5*z2 - 0.25*z3 - 0.1*z4)  # Note that prop can be as small as 0.01
+    t = rbinom(N, 1, prop)
+
+    # covariates exposed to analyst
+    x1 = exp(z1 / 2)
+    x2 = z2 / (1+exp(z1)) + 10
+    x3 = (z1 * z3 / 25 + 0.6)^3
+    x4 = (z2 + z4 + 20)^2
+
+    return(list(y = y, 
+                t = t, 
+                z1 = z1, z2 = z2, z3 = z3, z4 = z4,
+                x1 = x1, x2 = x2, x3 = x3, x4 = x4))
+}
+```
+
+In this case, the logistic regression of $t_i$ on the $z_{ij}$ would be a correct missing model and a linear regression of $y_i$ on the $z_{ij}$ would be a correct imputation model.
+
+If the analyst can only observe $x_{ij}$, then the analyst should use $\log(x_{i1}),x_2 x_1^2x_2,1/\log(x_1),x_3/\log(x_1),x_4^{1/2}$ as covariates to form correct models.
+
+
+```{r}
+data = data.gen(N_large)
+y = data$y
+t = data$t
+
+r1 = mean(t)
+mu = mean(y)
+mu1 = mean(y[t == 1])
+mu0 = mean(y[t == 0])
+print(paste(c(r1, mu, mu1, mu0)))
+```
+
+## IPW
+
+```{r}
+IPW = function(y, t, prop) {
+    N = length(y)
+    return(sum(t / prop * y)/N)
+}
+```
+
+
+```{r label = "IPW", eval = FALSE}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 2)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen(N_normal)
+    y = data$y
+    t = data$t
+
+    model_missing_correct = glm(t ~ z1 + z2 + z3 + z4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_correct = model_missing_correct$fitted.values
+
+    model_missing_incorrect = glm(t ~ x1 + x2 + x3 + x4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_incorrect = model_missing_incorrect$fitted.values 
+
+    result_raw[i, 1] = IPW(y, t, prop_missing_correct)
+    result_raw[i, 2] = IPW(y, t, prop_missing_incorrect)
+}
+save(result_raw, file = "data/data_IPW.RData")
+```
+
+```{r}
+load("data/data_IPW.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_bias_percent = result_bias / result_sd * 100
+result_mae = apply(result_raw, 2, function(x) median(abs(x - mu)))
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_bias_percent, result_mae, result_rmse)
+rownames(df) = c("IPW (correct missing model)", "IPW (incorrect missing model)")
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "% Bias", "MAE", "RMSE"))
+```
+
+## Modified IPW (SIPW)
+
+```{r}
+# Reweighting to resemble the full population
+SIPW_POP = function(y, t, prop){  # prop is estimated using missing model
+    return(sum(t / prop * y)/sum(t / prop))  # modified IPW
+}  
+
+# Reweighting to resemble the nonrespondents, return the estimate of full population
+SIPW_NR = function(y, t, prop) {
+    r1 = mean(t)
+    r0 = mean(1 - t)
+    mu_NR = sum(t / prop * (1 - prop) * y) / sum(t / prop * (1 - prop))
+    return(r1 * mean(y[t == 1]) + r0 * mu_NR)
+}
+```
+
+```{r label = "SIPW", eval = FALSE}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 4)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen(N_normal)
+    y = data$y
+    t = data$t
+
+    model_missing_correct = glm(t ~ z1 + z2 + z3 + z4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_correct = model_missing_correct$fitted.values
+
+    model_missing_incorrect = glm(t ~ x1 + x2 + x3 + x4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_incorrect = model_missing_incorrect$fitted.values 
+
+    result_raw[i, 1] = SIPW_POP(y, t, prop_missing_correct)
+    result_raw[i, 2] = SIPW_NR(y, t, prop_missing_correct)
+    result_raw[i, 3] = SIPW_POP(y, t, prop_missing_incorrect)
+    result_raw[i, 4] = SIPW_NR(y, t, prop_missing_incorrect)
+}
+save(result_raw, file = "data/data_SIPW.RData")
+```
+
+```{r}
+load("data/data_SIPW.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_bias_percent = result_bias / result_sd * 100
+result_mae = apply(result_raw, 2, function(x) median(abs(x - mu)))
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_bias_percent, result_mae, result_rmse)
+rownames(df) = c("SIPW_POP (correct missing model)", "SIPW_NR (correct missing model)",
+              "SIPW_POP (incorrect missing model)", "SIPW_NR (incorrect missing model)")
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "% Bias", "MAE", "RMSE"))
+```
+
+## Strat-$\pi$
+
+One big problem of IPW is the extreme weights. Stratification will lead to small increase in bias by coarsening the $\hat{\pi}$. However, such bias will be easily offset by the greater efficiency that results from stablizing the largest weights.
+
+```{r }
+# This is very slow and we need to use matrix version instead
+Strat_Pi = function(y, t, prop, S=5){ 
+    N = length(y)
+    si = cut(prop, breaks = S, labels = 1:S)  # each individual's stratum
+    ci = matrix(NA, nrow = N, ncol = S)  # indicator matrix
+    for (s in 1:S) {
+        for (i in 1:N) {
+            ci[i, s] = (si[i] == s)
+        }
+    }
+    strata = rep(NA, S)
+    for (s in 1:S) {
+        strata[s] = (sum(ci[, s]) / N) * (sum(ci[,s] * t * y) / sum(sum(ci[,s] * t)))
+    }
+    return(sum(strata))
+}  
+
+Strat_Pi_matrix = function(y, t, prop, S=5){ 
+    N = length(y)
+    si = cut(prop, breaks = S, labels = 1:S)
+    ci = sapply(1:S, function(s) si == s)
+    strata = colSums(ci) / N * colSums(ci * t * y) / colSums(ci * t)
+    return(sum(strata))
+}  
+```
+
+**We can observe that the propensity scores here are only used for stratification, not for inverse probability weighting!**
+
+```{r label = "Strat-Pi", eval = FALSE}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 2)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen(N_normal)
+    y = data$y
+    t = data$t
+
+    model_missing_correct = glm(t ~ z1 + z2 + z3 + z4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_correct = model_missing_correct$fitted.values
+
+    model_missing_incorrect = glm(t ~ x1 + x2 + x3 + x4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_incorrect = model_missing_incorrect$fitted.values 
+
+    result_raw[i, 1] = Strat_Pi_matrix(y, t, prop_missing_correct)
+    result_raw[i, 2] = Strat_Pi_matrix(y, t, prop_missing_incorrect)
+}
+save(result_raw, file = "data/data_strat_pi.RData")
+```
+
+```{r}
+load("data/data_strat_pi.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_bias_percent = result_bias / result_sd * 100
+result_mae = apply(result_raw, 2, function(x) median(abs(x - mu)))
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_bias_percent, result_mae, result_rmse)
+rownames(df) = c("Strat-Pi (correct missing model)", "Strat-Pi (incorrect missing model)")
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "% Bias", "MAE", "RMSE"))
+```
+
+## Regression Estimation
+
+IPW and Strat-$\pi$ pay no attention to relationships between the covariates and $y_i$. MAR implies that $E(y_i|x_i,t_i=0)=E(y_i|x_i,t_i=1)=E(y_i|x_i)$.
+
+```{r label = "OLS", eval = FALSE}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 2)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen(N_normal)
+    data1 = lapply(data, function(x) x[data$t == 1])
+
+    # Regress y_i on x_i among the respondents
+    model_imputation_correct = lm(y ~ z1 + z2 + z3 + z4, data=data1)
+    model_imputation_incorrect = lm(y ~ x1 + x2 + x3 + x4, data=data1)
+
+    result_raw[i, 1] = mean(predict(model_imputation_correct, newdata=data))
+    result_raw[i, 2] = mean(predict(model_imputation_incorrect, newdata=data))
+}
+save(result_raw, file = "data/data_OLS.RData")
+```
+
+```{r}
+load("data/data_OLS.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_bias_percent = result_bias / result_sd * 100
+result_mae = apply(result_raw, 2, function(x) median(abs(x - mu)))
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_bias_percent, result_mae, result_rmse)
+rownames(df) = c("OLS (correct imputation model)", "OLS (incorrect imputation model)")
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "% Bias", "MAE", "RMSE"))
+```
+
+The bias is removed when the imputation model is correct, but not when the model is wrong.
+
+**We also notice that the estimates based on the incorrect imputation model are more stable and efficient than those based on the incorrect missing model.**
+
+## Strat-$\pi\times y$
+
+We now cross-classify units by estimated propensity scores and covariates that are strongly related to the outcome.
+
+```{r}
+Strat_Pi_y = function(y, t, prop, y_imputed, S=5){ 
+    si_pi = cut(prop, breaks = S, labels = 1:S)
+    si_y = cut(y_imputed, breaks = S, labels = 1:S)
+
+    table_si = table(si_pi, si_y)
+    cell_means = matrix(NA, nrow = S, ncol = S)
+    cell_n = matrix(NA, nrow = S, ncol = S)
+
+    for (i in 1:S) {
+        for (j in 1:S) {
+            # All individuals in the cell
+            cell_indices = which(si_pi == i & si_y == j)
+            
+            cell_n[i,j] = length(cell_indices)
+            if (length(cell_indices) > 0) {
+                t1_indices_cell = cell_indices[t[cell_indices] == 1]
+                
+                if (length(t1_indices_cell) > 0) {
+                    cell_means[i, j] = mean(y[t1_indices_cell])
+                }
+            } 
+        }
+    }
+
+    # Handle offending cells (cells that only has non-respondents)
+    for (i in 1:S) {
+        for (j in 1:S) {
+            # If the cell mean is NA (offending cell)
+            if (is.na(cell_means[i, j]) && cell_n[i, j] > 0) {
+                # Here we use imputation model assuming only row and column effects (no interaction)
+                row_effect = mean(cell_means[i, ], na.rm = TRUE)  # Row-wise mean
+                col_effect = mean(cell_means[, j], na.rm = TRUE)  # Column-wise mean
+                overall_mean = mean(cell_means, na.rm = TRUE)     # Overall mean
+                cell_means[i, j] = row_effect + col_effect - overall_mean
+            }
+        }
+    }
+
+    cell_means_vector = as.vector(cell_means)
+    cell_n_vector = as.vector(cell_n)
+    return(weighted.mean(cell_means_vector, cell_n_vector, na.rm = TRUE))
+}  
+```
+
+Here the imputation we use $\hat y_{ij}=\mu_i+\nu_j-\mu$ where $\mu_i$ is the mean of $i$th row, $\nu_j$ is the mean of $j$th column, and $\mu$ is the overall mean.
+
+```{r label = "Strat-Pi-y", eval = FALSE}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 4)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen(N_small)
+    y = data$y
+    t = data$t
+    data1 = lapply(data, function(x) x[data$t == 1])
+
+    model_missing_correct = glm(t ~ z1 + z2 + z3 + z4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_correct = model_missing_correct$fitted.values
+
+    model_missing_incorrect = glm(t ~ x1 + x2 + x3 + x4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_incorrect = model_missing_incorrect$fitted.values 
+
+    # Regress y_i on x_i among the respondents
+    model_imputation_correct = lm(y ~ z1 + z2 + z3 + z4, data=data1)
+    model_imputation_incorrect = lm(y ~ x1 + x2 + x3 + x4, data=data1)
+
+    y_imputed_correct = predict(model_imputation_correct, newdata=data)
+    y_imputed_incorrect = predict(model_imputation_incorrect, newdata=data)
+
+    result_raw[i, 1] = Strat_Pi_y(y, t, prop_missing_correct, y_imputed_correct)
+    result_raw[i, 2] = Strat_Pi_y(y, t, prop_missing_correct, y_imputed_incorrect)
+    result_raw[i, 3] = Strat_Pi_y(y, t, prop_missing_incorrect, y_imputed_correct)
+    result_raw[i, 4] = Strat_Pi_y(y, t, prop_missing_incorrect, y_imputed_incorrect)
+}
+save(result_raw, file = "data/data_strat_pi_y.RData")
+```
+
+```{r}
+load("data/data_strat_pi_y.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_bias_percent = result_bias / result_sd * 100
+result_mae = apply(result_raw, 2, function(x) median(abs(x - mu)))
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_bias_percent, result_mae, result_rmse)
+rownames(df) = c("Strat-Pi-y (correct missing model, correct imputation model)", 
+                  "Strat-Pi-y (correct missing model, incorrect imputation model)",
+                  "Strat-Pi-y (incorrect missing model, correct imputation model)",
+                  "Strat-Pi-y (incorrect missing model, incorrect imputation model)")
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "% Bias", "MAE", "RMSE"))
+```
+
+This produces a crude kind of double robustness, as the bias is relatively low if the $\pi$-model is correctly specified or if the $y$ model is correctly specified.
+
+## OLC-BC (AIPW)
+
+Cassel proposed the bias-corrected estimate $\hat{\mu}_{OLS-BC}=\hat{\mu}_{OLS}+\frac{1}{n}\sum_i t_i\hat{\pi}_i^{-1}\hat{\varepsilon}_i$ that uses the missing model to correct OLS estimate for bias arising from the imputation model failure. Notice that when the imputation model is correct, then $E(\hat{\varepsilon}_i)=0$ and the second term has expectation zero; while when the missing model is true, the second term consistenly estimate the bias of the first term.
+
+```{r}
+OLS_BC = function(y, t, prop, y_imputed){  
+    N = length(y)
+    return (mean(y_imputed) + sum(t / prop * (y - y_imputed)) / N)
+}  
+```
+
+```{r label = "OLS-BC", eval = FALSE}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 4)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen(N_small)
+    y = data$y
+    t = data$t
+    data1 = lapply(data, function(x) x[data$t == 1])
+
+    model_missing_correct = glm(t ~ z1 + z2 + z3 + z4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_correct = model_missing_correct$fitted.values
+
+    model_missing_incorrect = glm(t ~ x1 + x2 + x3 + x4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_incorrect = model_missing_incorrect$fitted.values 
+
+    # Regress y_i on x_i among the respondents
+    model_imputation_correct = lm(y ~ z1 + z2 + z3 + z4, data=data1)
+    model_imputation_incorrect = lm(y ~ x1 + x2 + x3 + x4, data=data1)
+
+    y_imputed_correct = predict(model_imputation_correct, newdata=data)
+    y_imputed_incorrect = predict(model_imputation_incorrect, newdata=data)
+
+    result_raw[i, 1] = OLS_BC(y, t, prop_missing_correct, y_imputed_correct)
+    result_raw[i, 2] = OLS_BC(y, t, prop_missing_correct, y_imputed_incorrect)
+    result_raw[i, 3] = OLS_BC(y, t, prop_missing_incorrect, y_imputed_correct)
+    result_raw[i, 4] = OLS_BC(y, t, prop_missing_incorrect, y_imputed_incorrect)
+}
+save(result_raw, file = "data/data_OLS_BC.RData")
+```
+
+```{r}
+load("data/data_OLS_BC.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_bias_percent = result_bias / result_sd * 100
+result_mae = apply(result_raw, 2, function(x) median(abs(x - mu)))
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_bias_percent, result_mae, result_rmse)
+rownames(df) = c("OLS-BC(AIPW) (correct missing model, correct imputation model)", 
+                  "OLS-BC(AIPW) (correct missing model, incorrect imputation model)",
+                  "OLS-BC(AIPW) (incorrect missing model, correct imputation model)",
+                  "OLS-BC(AIPW) (incorrect missing model, incorrect imputation model)")
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "% Bias", "MAE", "RMSE"))
+```
+
+## WLS
+
+There are more ways to construct DR estimates. In AIPW the correction term repairs the bias arisng from incorrect imputation model by estimating the mean residual. A different way to repair this bias is to move the estimated coefficients away from $\hat{\beta}$. 
+
+Specifically, we use the propensity scores to compute a weighted least-squares estimated $\hat{\beta}_{WLS}=\sum_i \frac{t_i x_iy_i}{\hat\pi_i}/\sum_i \frac{t_i x_ix_i^T}{\hat\pi_i}$. Then this coefficient converges to the coefficients from OLS in the full population when the missing model is true. When imputation model is true, the estimate will again be consistent, but not efficient.
+
+```{r label = "WLS", eval = FALSE}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 4)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen(N_normal)
+    data1 = lapply(data, function(x) x[data$t == 1])
+
+    model_missing_correct = glm(t ~ z1 + z2 + z3 + z4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_correct = model_missing_correct$fitted.values
+    prop_missing_correct1 = prop_missing_correct[data$t == 1]
+
+    model_missing_incorrect = glm(t ~ x1 + x2 + x3 + x4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_incorrect = model_missing_incorrect$fitted.values 
+    prop_missing_incorrect1 = prop_missing_incorrect[data$t == 1]
+
+    # Regress y_i on x_i among the respondents
+    model_imputation_correct_missing_correct = lm(y ~ z1 + z2 + z3 + z4, data=data1, weights=1/prop_missing_correct1)
+    model_imputation_incorrect_missing_correct = lm(y ~ x1 + x2 + x3 + x4, data=data1, weights=1/prop_missing_correct1)
+    model_imputation_correct_missing_incorrect = lm(y ~ z1 + z2 + z3 + z4, data=data1, weights=1/prop_missing_incorrect1)
+    model_imputation_incorrect_missing_incorrect = lm(y ~ x1 + x2 + x3 + x4, data=data1, weights=1/prop_missing_incorrect1)
+
+    result_raw[i, 1] = mean(predict(model_imputation_correct_missing_correct, newdata=data))
+    result_raw[i, 2] = mean(predict(model_imputation_incorrect_missing_correct, newdata=data))
+    result_raw[i, 3] = mean(predict(model_imputation_correct_missing_incorrect, newdata=data))
+    result_raw[i, 4] = mean(predict(model_imputation_incorrect_missing_incorrect, newdata=data))
+}
+save(result_raw, file = "data/data_WLS.RData")
+```
+
+```{r}
+load("data/data_WLS.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_bias_percent = result_bias / result_sd * 100
+result_mae = apply(result_raw, 2, function(x) median(abs(x - mu)))
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_bias_percent, result_mae, result_rmse)
+rownames(df) = c("WLS (correct missing model, correct imputation model)", 
+                  "WLS (correct missing model, incorrect imputation model)",
+                  "WLS (incorrect missing model, correct imputation model)",
+                  "WLS (incorrect missing model, incorrect imputation model)")
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "% Bias", "MAE", "RMSE"))
+```
+
+## $\pi$-Cov
+
+The third way to construct a DR estimate is to incorporate functions of estimated propensity scores $\hat\pi$ into the imputation model.
+
+One particular case is to take $S_i=\hat{\pi}_i^{-1}$ to form $x_i^*=(x_i^T,S_i^T)$ that denote the augmented vector of covariates. Then we can construct $\hat{\beta}^*$ through OLS and $\hat{\mu}_{\pi-cov}=\frac{1}{n}x_i^*\hat{\beta}^*$.
+
+```{r label = "pi-Cov", eval = FALSE}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 4)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen(N_normal)
+    data1 = lapply(data, function(x) x[data$t == 1])
+
+    model_missing_correct = glm(t ~ z1 + z2 + z3 + z4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_correct = model_missing_correct$fitted.values
+    data$prop_missing_correct_inv = 1/prop_missing_correct
+    prop_missing_correct1 = prop_missing_correct[data$t == 1]
+    data1$prop_missing_correct_inv = 1/prop_missing_correct1
+
+    model_missing_incorrect = glm(t ~ x1 + x2 + x3 + x4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_incorrect = model_missing_incorrect$fitted.values 
+    data$prop_missing_incorrect_inv = 1/prop_missing_incorrect
+    prop_missing_incorrect1 = prop_missing_incorrect[data$t == 1]
+    data1$prop_missing_incorrect_inv = 1/prop_missing_incorrect1
+
+    # Regress y_i on x_i among the respondents
+    model_imputation_correct_missing_correct = lm(y ~ z1 + z2 + z3 + z4 + prop_missing_correct_inv, data=data1)
+    model_imputation_incorrect_missing_correct = lm(y ~ x1 + x2 + x3 + x4 + prop_missing_correct_inv, data=data1)
+    model_imputation_correct_missing_incorrect = lm(y ~ z1 + z2 + z3 + z4 + prop_missing_incorrect_inv, data=data1)
+    model_imputation_incorrect_missing_incorrect = lm(y ~ x1 + x2 + x3 + x4 + prop_missing_incorrect_inv, data=data1)
+
+    result_raw[i, 1] = mean(predict(model_imputation_correct_missing_correct, newdata=data))
+    result_raw[i, 2] = mean(predict(model_imputation_incorrect_missing_correct, newdata=data))
+    result_raw[i, 3] = mean(predict(model_imputation_correct_missing_incorrect, newdata=data))
+    result_raw[i, 4] = mean(predict(model_imputation_incorrect_missing_incorrect, newdata=data))
+}
+save(result_raw, file = "data/data_pi_cov.RData")
+```
+
+```{r}
+load("data/data_pi_cov.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_bias_percent = result_bias / result_sd * 100
+result_mae = apply(result_raw, 2, function(x) median(abs(x - mu)))
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_bias_percent, result_mae, result_rmse)
+rownames(df) = c("pi-Cov (correct missing model, correct imputation model)", 
+                  "pi-Cov (correct missing model, incorrect imputation model)",
+                  "pi-Cov (incorrect missing model, correct imputation model)",
+                  "pi-Cov (incorrect missing model, incorrect imputation model)")
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "% Bias", "MAE", "RMSE"))
+```
+
+Such estimate performs poorly udner a mis-specified missing model. A better choice would be to coarsening the $\hat\eta$ of the missing model into five categories and creating four dummy indicators to distinguish among them.
+
+## ELW
+
+```{r}
+ELW = function(y, t, prop, eps=sqrt(.Machine$double.eps)){   # eps is the tolerance level
+    N = length(y)
+    n = sum(t)
+    y1 = y[t == 1]
+    prop1 = prop[t == 1]  # propensity score of respondents
+    low = min(prop1);   
+    xi  = n/N + (1-n/N)*prop1
+    up  = min(xi)-eps    
+
+    fun_alpha = function(alpha){  sum((prop1-alpha)/(xi-alpha)) }
+    alpha   = uniroot(fun_alpha, interval=c(low, up), tol=eps)$root
+    lambda  =  (N/n-1)/(1-alpha)      
+    tmp     =  1+lambda*(prop1-alpha) 
+    prob.elw =  1/(n*tmp) 
+
+    return(sum(y1*prob.elw))
+}  
+```
+
+
+```{r label = "ELW", eval = FALSE}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 2)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen(N_normal)
+    y = data$y
+    t = data$t
+
+    model_missing_correct = glm(t ~ z1 + z2 + z3 + z4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_correct = model_missing_correct$fitted.values
+
+    model_missing_incorrect = glm(t ~ x1 + x2 + x3 + x4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_incorrect = model_missing_incorrect$fitted.values 
+
+    result_raw[i, 1] = ELW(y, t, prop_missing_correct)
+    result_raw[i, 2] = ELW(y, t, prop_missing_incorrect)
+}
+save(result_raw, file = "data/data_ELW.RData")
+```
+
+
+```{r}
+load("data/data_ELW.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_bias_percent = result_bias / result_sd * 100
+result_mae = apply(result_raw, 2, function(x) median(abs(x - mu)))
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_bias_percent, result_mae, result_rmse)
+rownames(df) = c("ELW (correct missing model)", "ELW (incorrect missing model)")
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "% Bias", "MAE", "RMSE"))
+```
+
+
+## ELW-DR
+
+```{r}
+ELW_DR = function(y, t, prop, y_imputed, eps=sqrt(.Machine$double.eps)){   # eps is the tolerance level
+    N = length(y)
+    n = sum(t)
+
+    # Only consider respondents
+    y1 = y[t == 1]
+    # y1_imputed = y_imputed[t == 1]
+    prop1 = prop[t == 1]  
+
+    low = min(prop1)
+    xi  = n/N + (1-n/N)*prop1
+    up  = min(xi)-eps    
+
+    fun_alpha = function(alpha){  sum((prop1-alpha)/(xi-alpha)) }
+    alpha   = uniroot(fun_alpha, interval=c(low, up), tol=eps)$root
+    lambda  =  (N/n-1)/(1-alpha)      
+    tmp     =  1+lambda*(prop1-alpha) 
+    prob.elw1 =  1/(n*tmp) 
+    prob.elw = rep(0, N)
+    prob.elw[t == 1] = prob.elw1 
+
+    return( sum(prob.elw * y) + mean(y_imputed) - sum(prob.elw * y_imputed) )
+}  
+```
+
+```{r label = "ELW-DR", eval = FALSE}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 4)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen(N_normal)
+    y = data$y
+    t = data$t
+    data1 = lapply(data, function(x) x[data$t == 1])
+
+    model_missing_correct = glm(t ~ z1 + z2 + z3 + z4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_correct = model_missing_correct$fitted.values
+
+    model_missing_incorrect = glm(t ~ x1 + x2 + x3 + x4, family=binomial(link="logit"), 
+                                data=data)
+    prop_missing_incorrect = model_missing_incorrect$fitted.values 
+
+    # Regress y_i on x_i among the respondents
+    model_imputation_correct = lm(y ~ z1 + z2 + z3 + z4, data=data1)
+    model_imputation_incorrect = lm(y ~ x1 + x2 + x3 + x4, data=data1)
+
+    y_imputed_correct = predict(model_imputation_correct, newdata=data)
+    y_imputed_incorrect = predict(model_imputation_incorrect, newdata=data)
+
+    result_raw[i, 1] = ELW_DR(y, t, prop_missing_correct, y_imputed_correct)
+    result_raw[i, 2] = ELW_DR(y, t, prop_missing_correct, y_imputed_incorrect)
+    result_raw[i, 3] = ELW_DR(y, t, prop_missing_incorrect, y_imputed_correct)
+    result_raw[i, 4] = ELW_DR(y, t, prop_missing_incorrect, y_imputed_incorrect)
+}
+save(result_raw, file = "data/data_ELW_DR.RData")
+```
+
+
+```{r}
+load("data/data_ELW_DR.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_bias_percent = result_bias / result_sd * 100
+result_mae = apply(result_raw, 2, function(x) median(abs(x - mu)))
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_bias_percent, result_mae, result_rmse)
+rownames(df) = c("ELW-DR (correct missing model, correct imputation model)", 
+                  "ELW-DR (correct missing model, incorrect imputation model)",
+                  "ELW-DR (incorrect missing model, correct imputation model)",
+                  "ELW-DR (incorrect missing model, incorrect imputation model)")
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "% Bias", "MAE", "RMSE"))
+```
+
+
+# Biased-Sample Empirical Likelihood Weighting for Missing Data Problems
+
+We add more estimators from the original paper.
+
+```{r}
+# modified IPW
+IPW.zzz = function(y, t, prop)
+{ 
+    N   = length(y)
+    index = 1:N
+    tmp = sort( prop )
+    i = max( which( tmp < 1/(index+1) ) ) 
+    crit = tmp[i] 
+    
+    prop.star = prop  
+    prop.star[which(prop <= crit)] = crit
+    return(sum(t*y/prop.star)/N)
+}
+
+# trimmed IPW
+IPW.chim = function(y, t, prop)
+{ 
+    tempfun = function(a) { 
+        u = prop*(1- prop)
+        v = a*(1-a)  
+        z = (u>=v)  
+        a + (2*v*sum( z/u )  >  sum(z) )
+    }   
+    a =  optimize(tempfun, lower=1e-5, upper=0.5, maximum=FALSE)$minimum  
+
+    N   = length(y)
+    y   = rep(y,  t)
+    pw  = rep(prop, t) 
+
+    ind = ( pw>a & pw< 1-a)
+    y.star  = y[ind]
+    pw.star = pw[ind]
+    return(sum(y.star/pw.star)/sum(1/pw.star))
+}
+
+# robust IPW estimator of Wang and Ma
+IPW.trim = function(y, t, prop)
+{ 
+    N = length(t)
+    n = sum(t) 
+
+    fun1=function(t, s){  2*n*t^s*mean(prop<=t) - 1 }
+    bn1=uniroot(fun1, c(0, 1), s=1)$root 
+    bn2=uniroot(fun1, c(0, 1), s=2)$root 
+
+    fun2=function(t){  n*t^5*mean(prop<=t) - 1  }
+    hn=uniroot(fun2, c(0, 1))$root  
+
+    yy = rep(y, t)
+    pw = rep(prop,t)
+    xx = cbind(rep(1,n),  pw)
+    ww = (pw<hn)
+    xx1 = cbind(ww,  ww*pw)
+    bet = ginv(t(xx1)%*%xx)%*%t(xx1)%*%yy 
+    xx.all = cbind(rep(1, N), prop)
+
+    Bnb1 =  - mean( (xx.all%*%bet)*(prop<bn1) )
+    ipw.trim1 =  mean(yy*(pw >= bn1)/pw) *n/N            
+    ipw.bc1 = ipw.trim1-Bnb1 
+
+    Bnb2 =  - mean( (xx.all%*%bet)*(prop<bn2) )
+    ipw.trim2 =  mean(yy*(pw >= bn2)/pw)*n/N
+    ipw.bc2 = ipw.trim2 -Bnb2
+
+    return(c(ipw.bc1, ipw.bc2))  # different tuning parameters s = 1 and s = 2
+}
+```
+
+
+# Bias-Reduced Doubly Robust Estimation
+
+## Scenario 1
+
+```{r}
+# Both models correct
+data.gen1 = function(N, eps = 2) {
+    x = rnorm(N)
+    prop = expit(eps * x)
+    t = rbinom(N, 1, prop)
+
+    y = rnorm(N, 1 + x, 1)
+
+    return(list(y = y, 
+                t = t,
+                x = x))
+}
+
+# Imputation model incorrect
+data.gen2 = function(N, eps = 2) {
+    x = rnorm(N)
+    prop = expit(eps * x)
+    t = rbinom(N, 1, prop)
+
+    y = rnorm(N, x^2, 1)
+
+    return(list(y = y, 
+                t = t,
+                x = x))
+}
+
+# Missing model incorrect
+data.gen3 = function(N, eps = 2) {
+    x = rnorm(N)
+    prop = expit(-4 + 1.5 *abs(x)^0.5 + 0.75*x + 0.5 *abs(x)^1.5)
+    t = rbinom(N, 1, prop)
+
+    y = rnorm(N, 1 + x, 1)
+
+    return(list(y = y, 
+                t = t,
+                x = x))
+}
+
+# Both models incorrect
+data.gen4 = function(N, eps = 2) {
+    x = rnorm(N)
+    prop = expit(-4 + 1.5 *abs(x)^0.5 + 0.75*x + 0.5 *abs(x)^1.5)
+    t = rbinom(N, 1, prop)
+
+    y = rnorm(N, x^2, 1)
+
+    return(list(y = y, 
+                t = t,
+                x = x))
+}
+```
+
+
+```{r}
+# We put all estimators into one function for convenience
+estimator.all = function(data) {
+    result_raw = c()
+    rownames = c()
+
+    data1 = lapply(data, function(x) x[data$t == 1])
+    y = data$y
+    t = data$t
+    x = data$x
+
+    model_missing = glm(t ~ x, family=binomial(link="logit"), data=data)
+    prop_missing = model_missing$fitted.values
+    data$prop_missing_inv = 1/prop_missing
+    prop_missing1 = prop_missing[data$t == 1]
+    data1$prop_missing_inv = 1/prop_missing1
+
+    model_imputation = lm(y ~ x, data=data1)
+    y_imputed = predict(model_imputation, newdata=data)
+
+    wls_model = lm(y ~ x, data=data1, weights=1/prop_missing1)
+
+    pi_cov_model = lm(y ~ x + prop_missing_inv, data=data1)
+
+    result_raw = c(result_raw, IPW(y, t, prop_missing))
+    rownames = c(rownames, "IPW")
+
+    result_raw = c(result_raw, SIPW_POP(y, t, prop_missing))
+    result_raw = c(result_raw, SIPW_NR(y, t, prop_missing))
+    rownames = c(rownames, "SIPW_POP", "SIPW_NR")
+
+    result_raw = c(result_raw, Strat_Pi_matrix(y, t, prop_missing))
+    rownames = c(rownames, "Strat-Pi")
+
+    result_raw = c(result_raw, mean(predict(model_imputation, newdata=data)))
+    rownames = c(rownames, "OLS")
+
+    result_raw = c(result_raw, Strat_Pi_y(y, t, prop_missing, y_imputed))
+    rownames = c(rownames, "Strat-Pi-y")
+
+    result_raw = c(result_raw, OLS_BC(y, t, prop_missing, y_imputed))
+    rownames = c(rownames, "OLS-BC(AIPW)")
+    
+    result_raw = c(result_raw, mean(predict(wls_model, newdata=data)))
+    rownames = c(rownames, "WLS")
+
+    result_raw = c(result_raw, mean(predict(pi_cov_model, newdata=data)))
+    rownames = c(rownames, "pi-Cov")
+
+    result_raw = c(result_raw, IPW.zzz(y, t, prop_missing))
+    rownames = c(rownames, "IPW-ZZZ")
+
+    result_raw = c(result_raw, IPW.chim(y, t, prop_missing))
+    rownames = c(rownames, "IPW-CHIM")
+
+    result_raw = c(result_raw, IPW.trim(y, t, prop_missing))
+    rownames = c(rownames, "IPW-TRIM1", "IPW-TRIM2")
+
+    result_raw = c(result_raw, ELW(y, t, prop_missing))
+    rownames = c(rownames, "ELW")
+
+    result_raw = c(result_raw, ELW_DR(y, t, prop_missing, y_imputed))
+    rownames = c(rownames, "ELW-DR")
+
+    return(list(result_raw=result_raw, rownames=rownames))
+}
+```
+
+### Both models correct
+
+```{r label = "Scenario1-Both models correct"}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 15)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen1(N_normal)
+    
+    results = estimator.all(data)
+    result_raw[i,] = results$result_raw
+    rownames = results$rownames
+}
+save(result_raw, rownames, file = "data/Scenario1/case1.RData")
+```
+
+
+```{r}
+data = data.gen1(N_large)
+y = data$y
+mu = mean(y)
+
+load("data/Scenario1/case1.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, resu77lt_sd, result_rmse)
+rownames(df) = rownames
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "RMSE"))
+```
+
+### Imputation model incorrect
+
+```{r label = "Imputation model incorrect"}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 15)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen2(N_normal)
+    
+    results = estimator.all(data)
+    result_raw[i,] = results$result_raw
+    rownames = results$rownames
+}
+save(result_raw, rownames, file = "data/Scenario1/case2.RData")
+```
+
+
+```{r}
+data = data.gen2(N_large)
+y = data$y
+mu = mean(y)
+
+load("data/Scenario1/case2.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_rmse)
+rownames(df) = rownames
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "RMSE"))
+```
+
+### Missing model incorrect
+
+```{r label = "Scenario1-Missing model incorrect"}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 15)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen3(N_normal)
+    
+    results = estimator.all(data)
+    result_raw[i,] = results$result_raw
+    rownames = results$rownames
+}
+save(result_raw, rownames, file = "data/Scenario1/case3.RData")
+```
+
+
+```{r}
+data = data.gen3(N_large)
+y = data$y
+mu = mean(y)
+
+load("data/Scenario1/case3.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_rmse)
+rownames(df) = rownames
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "RMSE"))
+```
+
+### Both models incorrect
+
+```{r label = "Scenario1-Both models incorrect"}
+pb = progress_estimated(nrep)
+result_raw = matrix(NA, nrow = nrep, ncol = 15)
+for (i in 1:nrep) {
+    update_progress(pb)
+    data = data.gen4(N_normal)
+    
+    results = estimator.all(data)
+    result_raw[i,] = results$result_raw
+    rownames = results$rownames
+}
+save(result_raw, rownames, file = "data/Scenario1/case4.RData")
+```
+
+
+```{r}
+data = data.gen4(N_large)
+y = data$y
+mu = mean(y)
+
+load("data/Scenario1/case4.RData")
+result_bias = colMeans(result_raw) - mu
+result_sd = apply(result_raw, 2, sd)
+result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
+
+df = cbind(result_bias, result_sd, result_rmse)
+rownames(df) = rownames
+knitr::kable(df,
+             row.names = TRUE,
+             col.names = c("Bias", "SD", "RMSE"))
+```

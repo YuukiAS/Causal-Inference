@@ -76,7 +76,6 @@ elw  <- function(dat)
     sum(y*prob.el)  
  }
 
-
  
 
 ####  Robust IPW estimator of  Wang and Ma, 2017, JASA   ##################### 
@@ -237,11 +236,13 @@ eeps=sqrt(.Machine$double.eps)   #### root of machine precision
 
 
 library(cem)
-data(LLvsPSID)
+data(LLvsPSID)  # Import LaLonde data
 dat.raw  = LLvsPSID
-y0 = dat.raw$re78
-x0 = dat.raw$re75
-ind = (x0> 0)
+y0 = dat.raw$re78  # define real earnings in 1978
+x0 = dat.raw$re75  # define real earnings in 1975
+
+# * Let D = treated, We would like to estimate the average earnings of the treated in 1978: theta=E[Y(1)]
+ind = (x0 > 0)
 y = y0[ind]
 x = x0[ind]  
 N=sum(ind)
@@ -263,7 +264,7 @@ for(i in  1:3){
   prop = n*prop0
   prop[prop>0.99] = 0.99
  
-  out1 = simu.poisson(nrep, popu, prop, theta)$rmse  
+  out1 = simu.poisson(nrep, popu, prop, theta)$rmse
    rmse1 = rbind(rmse1,  c(n,   out1)) 
   print(out1)
 
@@ -324,7 +325,6 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
- �û�  ϵͳ  ���� 
 46.67  1.48 48.23 
 
 
@@ -348,7 +348,6 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
- �û�  ϵͳ  ���� 
 52.39  1.10 53.57 
 > 
 
@@ -373,5 +372,4 @@ print(cpu.time)
 > end.time=proc.time()
 > cpu.time = end.time-start.time
 > print(cpu.time)
- �û�  ϵͳ  ���� 
 46.06  1.56 47.77 

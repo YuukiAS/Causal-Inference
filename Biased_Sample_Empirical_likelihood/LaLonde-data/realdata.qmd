@@ -1,0 +1,20 @@
+---
+title: Real Data Analysis
+author: Mingcheng Hu
+---
+
+## Import Data
+
+
+```{r}
+library(cem)
+data(LLvsPSID)  # Import LaLonde data
+dat.raw  = LLvsPSID
+head(dat.raw)
+y0 = dat.raw$re78  # define real earnings in 1978
+x0 = dat.raw$re75  # define real earnings in 1975
+```
+
+The response variable is `re78/10000`.
+
+Let D = treated, We would like to estimate the average earnings of the treated in 1978: $\theta=E[Y(1)]$

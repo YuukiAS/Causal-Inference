@@ -141,7 +141,7 @@ data.gen <- function(gam, N, fun_index, coef)
 {
    x  = rexp(N, gam)     
    ex = plogis(-x) 
-   eta = rnorm(N)  
+   eta = rnorm(N)    # epsilon
    reg = (fun_index==1)*log(1+x) + (fun_index==2)*((x-1)^2/4+(x-3)^2/4) + 
            (fun_index==3)*(5+ log(1+x)) + (fun_index==4)*((x-1)^2/4+(x-3)^2/4+5)
    y =  reg + eta*coef    

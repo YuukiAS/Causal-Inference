@@ -66,15 +66,15 @@ elw  <- function(dat)
 
 
 
-#####   Poisson sampling
+#####   Pivotal sampling
 simu.pivotal<-function(nrep, popu, prop, theta)
 { 
   result=NULL
   N = length(popu)
   n= round(sum(prop)) 
   for( i in 1:nrep){  
-      pik=inclusionprobabilities(prop, n)
-      index =  UPpivotal(pik)        
+      pik=sampling::inclusionprobabilities(prop, n)
+      index =  sampling::UPpivotal(pik)        
       dat=list(y=popu, ex=prop, D=(index>0.5))
 
       out.ipw=ipw(dat) 
@@ -169,5 +169,5 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
-  用户   系统   流逝 
+  锟矫伙拷   系统   锟斤拷锟斤拷 
 962.24   2.18 968.30 

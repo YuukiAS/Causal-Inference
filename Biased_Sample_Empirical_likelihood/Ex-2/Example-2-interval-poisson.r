@@ -65,7 +65,7 @@ simu.poisson<-function(nrep, popu, prop, theta)
   result=NULL
   n0 = round(sum(prop))
   for( i in 1:nrep){  
-      d=rbinom(N, rep(1, N), prop)
+      d=rbinom(N, rep(1, N), prop)  # number of trials is 1 for each i in N
       if(sum(d)<5)  d[1:n0]=1         
       dat=list(y=popu, ex=prop, D=d) 
 
@@ -98,10 +98,10 @@ library(MASS)
 eeps=sqrt(.Machine$double.eps)   #### root of machine precision
 
 N = 3000 
-x = runif(N)*2
+x = runif(N)*2  # x ~ Unif(0,2)
 e = rnorm(N) 
- 
-prop0 = x/sum(x)
+
+prop0 = x/sum(x)  
 nrep = 5000  
 nn= c(250, 500)
 
@@ -111,15 +111,17 @@ cov.all = NULL
 
 for(i in 1:2){ 
   n = nn[i]
-  prop = n*prop0
+  prop = n*prop0  # pi_i = nx_i/(sum_{j=1}^N x_j) for Poisson sampling
   for(k in 1:2){
     rho = rho.all[k]
     for(j in 1:4){
         model = j
+        # mu(x_i)
         reg  = (model==1)*sqrt(3)*rho* x  +  (model==2)*sqrt(3)*rho*(x+x^2) + 
                  (model==3)*(sqrt(3)*rho* x  + 5 ) + (model==4)*(sqrt(3)*rho*(x+x^2) + 5)
-
-        popu  = reg +  sqrt(3)*sqrt(1- rho^2)*abs(e)  
+        # y_i = mu(x_i) + sqrt(3 * (1-rho^2)) * e_i where e_i ~ N(0,1)
+        popu  = reg +  sqrt(3)*sqrt(1- rho^2)*abs(e) 
+        # theta is the parameter we want to estimate 
         theta = mean(popu)   
         out = simu.poisson(nrep, popu, prop, theta)  
         cov.all  = rbind(cov.all,  c(n, rho, model, out)) 
@@ -160,7 +162,7 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
- ÓÃ»§  ÏµÍ³  Á÷ÊÅ 
+ ï¿½Ã»ï¿½  ÏµÍ³  ï¿½ï¿½ï¿½ï¿½ 
 37.31  0.98 38.47 
 > 
 > 

@@ -64,7 +64,7 @@ elw  <- function(dat)
  }
 
 
-#####   Poisson sampling
+#####   PPS sampling
 simu.pps<-function(nrep, popu, prop, n, theta)
 { 
    result=NULL
@@ -72,7 +72,7 @@ simu.pps<-function(nrep, popu, prop, n, theta)
    prop = prop/sum(prop)
   
    for( i in 1:nrep){  
-      index = rmultinom(1, n, prop)
+      index = rmultinom(1, n, prop)  # one sample can be chosen multiple times
       dat=list(y=popu, ex=n*prop, D=index)       
 
       out.ipw=ipw(dat) 
@@ -167,7 +167,7 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
- ÓÃ»§  ÏµÍ³  Á÷ÊÅ 
+ ï¿½Ã»ï¿½  ÏµÍ³  ï¿½ï¿½ï¿½ï¿½ 
 50.45  1.22 51.94 
 > 
 
@@ -194,7 +194,7 @@ print(cpu.time)
 > end.time=proc.time()   
 > cpu.time = end.time-start.time
 > print(cpu.time)
- ÓÃ»§  ÏµÍ³  Á÷ÊÅ 
+ ï¿½Ã»ï¿½  ÏµÍ³  ï¿½ï¿½ï¿½ï¿½ 
 56.49  0.73 57.90 
 > 
 >  
