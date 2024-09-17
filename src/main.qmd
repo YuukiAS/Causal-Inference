@@ -9,6 +9,7 @@ library(knitr)
 library(knitrProgressBar)
 
 set.seed(1234)
+options(digits = 3)
 ```
 
 ```{r label = "Constants"}
@@ -790,13 +791,43 @@ IPW.trim = function(y, t, prop)
 
 # Bias-Reduced Doubly Robust Estimation
 
+We also include doubly robust estimators in the simulation.
+
+```{r}
+DR_BR = function(y, t, x) {
+    n<-length(t)
+    int.x<-cbind(rep(1,n),x)
+
+    min.Uint <-function(gamma) {
+        -mean((-t*exp(-gamma%*%t(int.x)))+(-(1-t)*(gamma%*%t(int.x))))
+    }
+    U <- function(t,y,X,gamma,beta){
+        (t/expit(gamma%*%t(X))*(y-beta%*%t(X))+beta%*%t(X))
+    }
+
+    # define Estimates of parameters indexing the working model for missingness probablity
+    init.gamma<-coef(glm(t~x,family="binomial"))
+    sol<-nlm(min.Uint,init.gamma)  # nonlinear minimization
+    gamma.BR<-sol$estimate
+    weight<-as.vector(1/exp(gamma.BR%*%t(int.x)))
+
+    # define Estimates of parameters indexing the working model for conditional mean
+    beta.BR<-coef(lm(y~-1+int.x,subset=(t==1),weights=weight))  # only consider respondents
+
+    mn.y<-mean(U(t,y,int.x,gamma.BR,beta.BR))
+    return(mn.y)
+}
+```
+
 ## Scenario 1
 
 ```{r}
 # Both models correct
 data.gen1 = function(N, eps = 2) {
     x = rnorm(N)
-    prop = expit(eps * x)
+    # When eps = 1, prop can be as small as 0.015
+    # When eps = 2, prop can be as small as 0.0002
+    prop = expit(eps * x) 
     t = rbinom(N, 1, prop)
 
     y = rnorm(N, 1 + x, 1)
@@ -911,15 +942,18 @@ estimator.all = function(data) {
     result_raw = c(result_raw, ELW_DR(y, t, prop_missing, y_imputed))
     rownames = c(rownames, "ELW-DR")
 
+    result_raw = c(result_raw, DR_BR(y, t, x))
+    rownames = c(rownames, "DR-BR")
+
     return(list(result_raw=result_raw, rownames=rownames))
 }
 ```
 
 ### Both models correct
 
-```{r label = "Scenario1-Both models correct"}
+```{r label = "Scenario1-Both models correct", eval = FALSE}
 pb = progress_estimated(nrep)
-result_raw = matrix(NA, nrow = nrep, ncol = 15)
+result_raw = matrix(NA, nrow = nrep, ncol = 16)
 for (i in 1:nrep) {
     update_progress(pb)
     data = data.gen1(N_normal)
@@ -942,7 +976,7 @@ result_bias = colMeans(result_raw) - mu
 result_sd = apply(result_raw, 2, sd)
 result_rmse = apply(result_raw, 2, function(x) sqrt(mean((x - mu)^2)))
 
-df = cbind(result_bias, resu77lt_sd, result_rmse)
+df = cbind(result_bias, result_sd, result_rmse)
 rownames(df) = rownames
 knitr::kable(df,
              row.names = TRUE,
@@ -951,9 +985,9 @@ knitr::kable(df,
 
 ### Imputation model incorrect
 
-```{r label = "Imputation model incorrect"}
+```{r label = "Scenario1-Imputation model incorrect", eval = FALSE}
 pb = progress_estimated(nrep)
-result_raw = matrix(NA, nrow = nrep, ncol = 15)
+result_raw = matrix(NA, nrow = nrep, ncol = 16)
 for (i in 1:nrep) {
     update_progress(pb)
     data = data.gen2(N_normal)
@@ -985,9 +1019,9 @@ knitr::kable(df,
 
 ### Missing model incorrect
 
-```{r label = "Scenario1-Missing model incorrect"}
+```{r label = "Scenario1-Missing model incorrect", eval = FALSE}
 pb = progress_estimated(nrep)
-result_raw = matrix(NA, nrow = nrep, ncol = 15)
+result_raw = matrix(NA, nrow = nrep, ncol = 16)
 for (i in 1:nrep) {
     update_progress(pb)
     data = data.gen3(N_normal)
@@ -1019,9 +1053,10 @@ knitr::kable(df,
 
 ### Both models incorrect
 
-```{r label = "Scenario1-Both models incorrect"}
+```{r label = "Scenario1-Both models incorrect", eval = FALSE}
 pb = progress_estimated(nrep)
-result_raw = matrix(NA, nrow = nrep, ncol = 15)
+result_raw = matrix(NA, nrow = nrep, ncol = 16)
+
 for (i in 1:nrep) {
     update_progress(pb)
     data = data.gen4(N_normal)
@@ -1050,3 +1085,5 @@ knitr::kable(df,
              row.names = TRUE,
              col.names = c("Bias", "SD", "RMSE"))
 ```
+
+Note that scenario2 is the same as the one in Demystifying Double Robustness.
