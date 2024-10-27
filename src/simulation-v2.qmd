@@ -1,0 +1,788 @@
+---
+title: 'Double Robust version of ELW: Simulation-2'
+author: 'Mingcheng Hu'
+---
+
+# Set Up Environment
+
+```{r include = FALSE}
+library(MASS)
+library(knitr)
+library(knitrProgressBar)
+library(tidyverse)
+library(tmle)  # Tested on version 1.3.0, not working on latest version
+
+set.seed(1234)
+options(digits = 3)
+```
+
+```{r label = "Constants"}
+nrep = 2000
+nrep_small = 100
+
+N_large = 100000
+N_normal = 20000
+N_small = 5000
+```
+
+
+
+# Implementing Estimators
+
+```{r label = "Utility Functions"}
+expit = function(x) 1/(1+exp(-x))
+logit = function(p) log(p/(1-p))
+```
+
+## Non-DR Estimators
+
+```{r}
+#' Missing model: Any
+#' Imputation model: Any
+IPW = function(y, D, prop) {
+    N = length(y)
+    return(sum(D / prop * y)/N)
+}
+```
+
+
+```{r}
+# Ref Kang, Joseph D. Y., and Joseph L. Schafer. “Demystifying Double Robustness: A Comparison of Alternative Strategies for Estimating a Population Mean from Incomplete Data.” Statistical Science, vol. 22, no. 4, Nov. 2007. DOI.org (Crossref), https://doi.org/10.1214/07-STS227.
+
+
+# Ref (3), Table 1
+# Reweighting to resemble the full population
+#' Missing model: Any
+#' Imputation model: Any
+SIPW_POP = function(y, D, prop){  # prop is estimated using missing model
+    return(sum(D / prop * y)/sum(D / prop))  # modified IPW
+}  
+
+# Ref (4), Table 1
+# Reweighting to resemble the nonrespondents, return the estimate of full population
+#' Missing model: Any
+#' Imputation model: Any
+SIPW_NR = function(y, D, prop) {
+    r1 = mean(D)
+    r0 = mean(1 - D)
+    mu_NR = sum(D / prop * (1 - prop) * y) / sum(D / prop * (1 - prop))
+    return(r1 * mean(y[D == 1]) + r0 * mu_NR)
+}
+
+# Ref (6), Table 2
+# We use the matrixed version below for faster computation
+#' Missing model: Any
+#' Imputation model: Any
+Strat_Pi = function(y, D, prop, S=5){ 
+    N = length(y)
+    si = cut(prop, breaks = S, labels = 1:S)  # each individual's stratum
+    ci = matrix(NA, nrow = N, ncol = S)  # indicator matrix
+    for (s in 1:S) {
+        for (i in 1:N) {
+            ci[i, s] = (si[i] == s)
+        }
+    }
+    strata = rep(NA, S)
+    for (s in 1:S) {
+        strata[s] = (sum(ci[, s]) / N) * (sum(ci[,s] * D * y) / sum(sum(ci[,s] * D)))
+    }
+    return(sum(strata))
+}  
+
+Strat_Pi_matrix = function(y, D, prop, S=5){ 
+    N = length(y)
+    si = cut(prop, breaks = S, labels = 1:S)
+    ci = sapply(1:S, function(s) si == s)
+    strata = colSums(ci) / N * colSums(ci * D * y) / colSums(ci * D)
+    return(sum(strata))
+}
+
+# Ref (7), Table 3
+# * See comment for demystifing paper why it works well
+#' Missing model: Any
+#' Imputation model: Linear
+OLS = function(y, D, x, impute_model_formula) {
+    data = data.frame(y = y, D = D, x = x)
+    impute_model = lm(impute_model_formula, data = subset(data, D == 1))
+    return(mean(impute_model, newdata = data))
+}
+
+# Ref Table 4
+#' Missing model: Any
+#' Imputation model: Any
+Strat_Pi_y = function(y, D, prop, y_imputed, S=5){ 
+    si_pi = cut(prop, breaks = S, labels = 1:S)
+    si_y = cut(y_imputed, breaks = S, labels = 1:S)
+
+    table_si = table(si_pi, si_y)
+    cell_means = matrix(NA, nrow = S, ncol = S)
+    cell_n = matrix(NA, nrow = S, ncol = S)
+
+    for (i in 1:S) {
+        for (j in 1:S) {
+            # All individuals in the cell
+            cell_indices = which(si_pi == i & si_y == j)
+            
+            cell_n[i,j] = length(cell_indices)
+            if (length(cell_indices) > 0) {
+                t1_indices_cell = cell_indices[D[cell_indices] == 1]
+                
+                if (length(t1_indices_cell) > 0) {
+                    cell_means[i, j] = mean(y[t1_indices_cell])
+                }
+            } 
+        }
+    }
+
+    # Handle offending cells (cells that only has non-respondents)
+    for (i in 1:S) {
+        for (j in 1:S) {
+            # If the cell mean is NA (offending cell)
+            if (is.na(cell_means[i, j]) && cell_n[i, j] > 0) {
+                # Here we use imputation model assuming only row and column effects (no interaction)
+                row_effect = mean(cell_means[i, ], na.rm = TRUE)  # Row-wise mean
+                col_effect = mean(cell_means[, j], na.rm = TRUE)  # Column-wise mean
+                overall_mean = mean(cell_means, na.rm = TRUE)     # Overall mean
+                cell_means[i, j] = row_effect + col_effect - overall_mean
+            }
+        }
+    }
+
+    cell_means_vector = as.vector(cell_means)
+    cell_n_vector = as.vector(cell_n)
+    return(weighted.mean(cell_means_vector, cell_n_vector, na.rm = TRUE))
+}   
+```
+
+```{r}
+# todo Why?
+#' Missing model: Any
+#' Imputation model: Any
+IPW.zzz = function(y, D, prop)
+{ 
+    N   = length(y)
+    index = 1:N
+    tmp = sort( prop )
+    i = max( which( tmp < 1/(index+1) ) ) 
+    crit = tmp[i] 
+    
+    prop.star = prop  
+    prop.star[which(prop <= crit)] = crit
+    return(sum(D*y/prop.star)/N)
+}
+
+# todo Why?
+#' Missing model: Any
+#' Imputation model: Any
+IPW.chim = function(y, D, prop)
+{ 
+    tempfun = function(a) { 
+        u = prop*(1- prop)
+        v = a*(1-a)  
+        z = (u>=v)  
+        a + (2*v*sum( z/u )  >  sum(z) )
+    }   
+    a =  optimize(tempfun, lower=1e-5, upper=0.5, maximum=FALSE)$minimum  
+
+    N   = length(y)
+    y   = rep(y,  D)
+    pw  = rep(prop, D) 
+
+    ind = ( pw>a & pw< 1-a)
+    y.star  = y[ind]
+    pw.star = pw[ind]
+    return(sum(y.star/pw.star)/sum(1/pw.star))
+}
+
+# Ref Ma, Xinwei, and Jingshen Wang. Robust Inference Using Inverse Probability Weighting. arXiv:1810.11397, arXiv, 24 May 2019. arXiv.org, http://arxiv.org/abs/1810.11397.
+# Ref Section 3.2
+#' Missing model: Any
+#' Imputation model: Any
+IPW.trim = function(y, D, prop)
+{ 
+    N = length(D)
+    n = sum(D) 
+
+    # Ref Theorem2
+    fun1=function(t, s){  2*n*t^s*mean(prop<=t) - 1 }
+    # define Trimming threshold
+    bn1=uniroot(fun1, c(0, 1), s=1)$root  # moderate trimming
+    bn2=uniroot(fun1, c(0, 1), s=2)$root  # heavy trimming
+
+    # define Bandwidth sequence for local polynomial regression
+    # Ref Supplementary Material II.1
+    fun2=function(t){  n*t^5*mean(prop<=t) - 1  }
+    hn=uniroot(fun2, c(0, 1))$root  
+
+    y1 = rep(y, D)  # observed Y
+    pw = rep(prop,D)
+    xx = cbind(rep(1,n),  pw)
+    ww = (pw<hn)  # We use subsample in region (0,hn) for local polynomial regression
+    xx1 = cbind(ww,  ww*pw)
+    xx.all = cbind(rep(1, N), prop)
+
+    # Ref Algorithm1, Step1
+    beta = ginv(t(xx1)%*%xx)%*%t(xx1)%*%y1 
+
+    # define Bias correction terms
+    # Ref Algorithm1, Step2
+    Bnb1 =  - mean( (xx.all%*%beta)*(prop<bn1) )
+    ipw.trim1 =  mean(y1*(pw >= bn1)/pw) *n/N            
+    ipw.bc1 = ipw.trim1-Bnb1 
+
+    Bnb2 =  - mean( (xx.all%*%beta)*(prop<bn2) )
+    ipw.trim2 =  mean(y1*(pw >= bn2)/pw)*n/N
+    ipw.bc2 = ipw.trim2 -Bnb2
+
+    return(c(ipw.bc1, ipw.bc2))  # different tuning parameters s = 1 and s = 2
+}
+```
+
+```{r}
+# Ref Liu, Yukun. “Biased-Sample Empirical Likelihood Weighting for Missing Data Problems: An Alternative to Inverse Probability Weighting.” Statistical Methodology, vol. 85, no. 1, 2023.
+#' Missing model: Any
+#' Imputation model: Any
+ELW = function(y, D, prop, eps=sqrt(.Machine$double.eps)){   # eps is the tolerance level
+    N = length(y)
+    n = sum(D)
+    y1 = y[D == 1]
+    prop1 = prop[D == 1]  # propensity score of respondents
+    low = min(prop1);   
+    xi  = n/N + (1-n/N)*prop1
+    up  = min(xi)-eps    
+
+    fun_alpha = function(alpha){  sum((prop1-alpha)/(xi-alpha)) }
+    alpha   = uniroot(fun_alpha, interval=c(low, up), tol=eps)$root
+    lambda  =  (N/n-1)/(1-alpha)      
+    tmp     =  1+lambda*(prop1-alpha) 
+    prob.elw =  1/(n*tmp) 
+
+    return(sum(y1*prob.elw))
+} 
+```
+
+## DR Estimators
+
+```{r}
+# * This is also BC (bias corrected)-OLS in demystifing paper, Table 5
+# * This is also mu_DR(pi, m_REG) in the comment for demystifing paper 
+#' Missing model: Any
+#' Imputation model: Any
+AIPW = function(y, D, prop, y_imputed){  
+    N = length(y)
+    return (mean(y_imputed) + sum(D / prop * (y - y_imputed)) / N)
+}  
+
+# B-DR in comment for demystifing paper
+#' Missing model: Any
+#' Imputation model: Any
+AIPW_Stablized = function(y, D, prop, y_imputed){  
+    N = length(y)
+    return (mean(y_imputed) + sum(D / prop * (y - y_imputed)) / sum(D / prop))
+}
+```
+
+```{r}
+# Ref Kang, Joseph D. Y., and Joseph L. Schafer. “Demystifying Double Robustness: A Comparison of Alternative Strategies for Estimating a Population Mean from Incomplete Data.” Statistical Science, vol. 22, no. 4, Nov. 2007. DOI.org (Crossref), https://doi.org/10.1214/07-STS227.
+
+# Ref (10), Table 6
+#' Missing model: Any
+#' Imputation model: Linear
+WLS = function(y, D, x, prop, impute_model_formula) {
+    data = data.frame(y = y, D = D, x = x, prop = prop)
+    impute_model = lm(impute_model_formula, data = subset(data, D == 1), weights = 1/prop)
+    return(mean(impute_model, newdata = data))
+}
+
+# * Coarsening eta into five categories and creating dummy indicators
+#' Missing model: Logistic
+#' Imputation model: Linear
+Pi_Cov_1 = function(y, D, x, prop, impute_model_formula) {
+    eta = expit(prop)
+    eta_cat = cut(eta, breaks = 5, labels = 1:5)
+    eta_dummy = model.matrix(~eta_cat - 1)
+    data = data.frame(y = y, D = D, x = x, prop = prop, eta_dummy)
+    impute_model_formula_extended = paste(impute_model_formula, "+ eta_dummy")
+    impute_model = lm(impute_model_formula_extended, data = subset(data, D == 1))
+    return(mean(impute_model, newdata = data))
+}
+
+# Ref Table 8
+# * This is also mu_DR(pi, m_EXTREG) in the comment for demystifing paper 
+#' Missing model: Any
+#' Imputation model: Linear
+Pi_Cov_2 = function(y, D, x, prop, impute_model_formula) {
+    prop_inv = 1/prop
+    impute_model_formula_extended = paste(impute_model_formula, "+ I(prop_inv)")
+    data = data.frame(y = y, D = D, x = x, prop = prop, prop_inv)
+    impute_model = lm(impute_model_formula_extended, data = subset(data, D == 1))
+    return(mean(impute_model, newdata = data))
+}
+```
+
+
+```{r}
+# Ref Gruber, Susan, and Mark J. Van Der Laan. “Tmle : An R Package for Targeted Maximum Likelihood Estimation.” Journal of Statistical Software, vol. 51, no. 13, 2012. DOI.org (Crossref), https://doi.org/10.18637/jss.v051.i13.
+# Ref Page 17 (Mis-specified imputation model)
+TMLE = function(y, D, x, prop_model_formula, impute_model_formula) {
+    result.EY1 = tmle(Y, A = rep(1,n), x, 
+                      Qform = impute_model_formula, g.Deltaform = prop_model_formula, Delta = D)
+    return(result.EY1$estimates$EY1$psi)
+}
+```
+
+```{r}
+# Ref Vermeulen, Karel, and Stijn Vansteelandt. “Bias-Reduced Doubly Robust Estimation.” Journal of the American Statistical Association, vol. 110, no. 511, July 2015, pp. 1024–36. DOI.org (Crossref), https://doi.org/10.1080/01621459.2014.958155.
+# Ref Section 3.3, Appendix J
+# * Missing model: Logistic
+# * Conditional mean model: Linear/Logistic
+DR_BR = function(y, D, x, type) {
+    n<-length(D)
+    xx<-cbind(rep(1,n),x)
+
+    # define Functions to obtain an estimator of gamma
+    # Linear conditional mean model
+    min.Uint.linear <-function(gamma) {
+        -mean((-D*exp(-gamma%*%t(xx)))+(-(1-D)*(gamma%*%t(xx))))
+    }
+
+    # Logistic conditional mean model
+    min.Uint.logistic <- function(gamma) {
+        -mean(((-R * exp(-gamma %*% t(xx))) + (-(1 - D) * (gamma %*% t(xx)))) * 
+              as.vector(expit(init.beta %*% t(xx)) * (1 - expit(init.beta %*% t(xx)))))
+    }
+
+    # This is exactly AIPW
+    U <- function(D, y, X, gamma, beta){
+        (D / expit(gamma %*% t(X)) * (y - beta %*% t(X)) + beta %*% t(X))
+    }
+
+    init.gamma<-coef(glm(D~x,family="binomial"))
+    if (type == "linear") {
+        sol<-nlm(min.Uint.linear, init.gamma)  # nonlinear minimization
+    } else if(type == "logistic") {
+        sol <- nlm(min.Uint.logistic, init.gamma)
+    } else {
+        stop("Invalid type")
+    }
+    # define Parameters of missing model
+    gamma.BR<-sol$estimate
+
+    weight<-as.vector(1/exp(gamma.BR%*%t(xx)))
+    # define Parameter of imputation model
+    beta.BR<-coef(lm(y~-1+xx,subset=(D==1),weights=weight))  # only consider respondents
+
+    # define Estimate of mean outcome
+    mn.y<-mean(U(D,y,xx,gamma.BR,beta.BR))
+    return(mn.y)
+}
+```
+
+```{r}
+# * Proposed estimator
+ELW_DR = function(y, D, prop, y_imputed, eps=sqrt(.Machine$double.eps)){   # eps is the tolerance level
+    N = length(y)
+    n = sum(D)
+
+    # Only consider respondents
+    y1 = y[D == 1]
+    # y1_imputed = y_imputed[D == 1]
+    prop1 = prop[D == 1]  
+
+    low = min(prop1)
+    xi  = n/N + (1-n/N)*prop1
+    up  = min(xi)-eps    
+
+    fun_alpha = function(alpha){  sum((prop1-alpha)/(xi-alpha)) }
+    alpha   = uniroot(fun_alpha, interval=c(low, up), tol=eps)$root
+    lambda  =  (N/n-1)/(1-alpha)      
+    tmp     =  1+lambda*(prop1-alpha) 
+    prob.elw1 =  1/(n*tmp) 
+    prob.elw = rep(0, N)
+    prob.elw[D == 1] = prob.elw1 
+
+    # * Note here we can use prob.elw * y as prob.elw is only nonzero for respondents
+    return( sum(prob.elw * y) + mean(y_imputed) - sum(prob.elw * y_imputed) )
+}  
+```
+
+```{r}
+# Ref Robins, James, et al. “Comment: Performance of Double-Robust Estimators When ‘Inverse Probability’ Weights Are Highly Variable.” Statistical Science, vol. 22, no. 4, Nov. 2007. DOI.org (Crossref), https://doi.org/10.1214/07-STS227D.
+
+# AIPW estimator can be expressed as mu_DR(pi, m_REG)
+
+# Ref IPW DR Estimator: mu_DR(pi_EXT, m_REG)
+DR_Bounded_IPW = function(y, D, x, prop_model_formula, impute_model_formula){  
+    data = data.frame(y = y, D = D, x = x)
+    mu_OLS = OLS(y, D, x, impute_model_formula)
+    y_imputed = lm(impute_model_formula, data = subset(data, D == 1))$fitted.values
+    h = y_imputed - mu_OLS
+    prop_model_formula_extended = paste(prop_model_formula, "+ h")
+    data = data.frame(y = y, D = D, x = x, h = h)
+    prop = glm(prop_model_formula_extended, family = binomial)$fitted.values
+    return(AIPW_Stablized(y, D, prop, y_imputed))
+}
+  
+# Ref Regression DR Estimator1: mu_DR(pi, m_EXTREG)
+# Already implemented above as Pi_Cov_2
+
+# Ref Regression DR Estimator2: mu_DR(pi, m_WLS)
+# Already implemented above as WLS
+
+# Ref Regression DR Estimator3: mu_DR(pi, m_DR_IPW_NR)
+# * Adding the covariate pi instead of adding 1/pi doesn't induce model extrapolation problems
+#' Missing model: Logistic
+#' Imputation model: Linear
+DR_Bounded_Regression = function(y, D, x, prop, impute_model_formula) {
+    impute_model_formula_extended = paste(impute_model_formula, "+ prop")
+    data = data.frame(y = y, D = D, x = x, prop = prop)
+    impute_model = lm(impute_model_formula_extended, data = subset(data, D == 1))
+    return(mean(impute_model, newdata = data))
+}
+```
+
+```{r}
+# Ref Matsouaka, Roland A., and Yunji Zhou. A Framework for Causal Inference in the Presence of Extreme Inverse Probability Weights: The Role of Overlap Weights. arXiv:2011.01388, arXiv, 24 Oct. 2022. arXiv.org, http://arxiv.org/abs/2011.01388.
+# todo Overlap Weight (OW)
+
+# todo Matching Weight (MW)
+
+# todo Shannon's Entropy Weight (EW)
+
+# todo Beta Weight (BW)
+```
+
+```{r}
+# Ref Zhang, Min, and Baqun Zhang. “A Stable and More Efficient Doubly Robust Estimator.” Statistica Sinica, 2022. DOI.org (Crossref), https://doi.org/10.5705/ss.202019.0265.
+# todo
+```
+
+```{r}
+# Ref Rotnitzky, A., et al. “Improved Double-Robust Estimation in Missing Data and Causal Inference Models.” Biometrika, vol. 99, no. 2, June 2012, pp. 439–56. DOI.org (Crossref), https://doi.org/10.1093/biomet/ass013.
+# todo
+```
+
+```{r}
+# Ref “Multiply Robust Imputation Procedures for the Treatment of Item Nonresponse in Surveys.” Biometrika, 2017. DOI.org (Crossref), https://doi.org/10.1093/biomet/asx007.
+# todo
+```
+
+
+# Various Data Generation Mechanisms with Extreme with Extreme Weights
+
+For the incorrect models, we follow the convention in *A Framework for Causal Inference in the Presence of Extreme Inverse Probability Weights* and omit the first covariate.
+
+In order to make use of the estimators defined above, we need to supply `prop`, `y_imputed`, `prop_model_formula` and `impute_model_formula` for each data generation mechanism. We will provide a list through `fitted_model`.
+
+
+## Demystifying Double Robustness: A Comparison of Alternative Strategies for Estimating a Population Mean from Incomplete Data & Comment: Performance of Double-Robust Estimators When "Inverse Probability" Weights Are Highly Variable
+
+The simulation 1 is proposed in demystifing paper. This is a standard scenario and has been widely used in a variety of related papers.
+
+```{r}
+#' Model mis-speification: Wrong covariates
+data.gen1 = function(N) {
+    z1 = rnorm(N)
+    z2 = rnorm(N)
+    z3 = rnorm(N)
+    z4 = rnorm(N)
+    epsilon = rnorm(N)
+    y = 210 + 27.4*z1 + 13.7*z2 + 13.7*z3 + 13.7*z4 + epsilon
+    prop = expit(-z1 + 0.5*z2 - 0.25*z3 - 0.1*z4)  # Note that prop can be as small as 0.01
+    D = rbinom(N, 1, prop)
+
+    # wrong covariates exposed to analyst
+    x1 = exp(z1 / 2)
+    x2 = z2 / (1+exp(z1)) + 10
+    x3 = (z1 * z3 / 25 + 0.6)^3
+    x4 = (z2 + z4 + 20)^2
+
+    return(list(y = y, 
+                D = D, 
+                z1 = z1, z2 = z2, z3 = z3, z4 = z4,
+                x1 = x1, x2 = x2, x3 = x3, x4 = x4),
+           prop=prop)
+}
+```
+
+
+The simulation 2 is a modification of the original one. We change the setting from $D=1$ being the respondents to $D=0$ being the respondents. This is proposed in the comment paper, designed so that OLS estimator no longer performs better than DR estimators.
+
+
+```{r}
+#' Model mis-speification: Wrong covariates
+data.gen2 = function(N) {
+    z1 = rnorm(N)
+    z2 = rnorm(N)
+    z3 = rnorm(N)
+    z4 = rnorm(N)
+    epsilon = rnorm(N)
+    y = 210 + 27.4*z1 + 13.7*z2 + 13.7*z3 + 13.7*z4 + epsilon
+    prop = expit(-z1 + 0.5*z2 - 0.25*z3 - 0.1*z4)  # Note that prop can be as small as 0.01
+    D = rbinom(N, 1, prop)
+    # * We analyze the data in which Y is observed only when D = 0
+    D = 1 - D
+
+    # covariates exposed to analyst
+    x1 = exp(z1 / 2)
+    x2 = z2 / (1+exp(z1)) + 10
+    x3 = (z1 * z3 / 25 + 0.6)^3
+    x4 = (z2 + z4 + 20)^2
+
+    return(list(y = y, 
+                D = D, 
+                z1 = z1, z2 = z2, z3 = z3, z4 = z4,
+                x1 = x1, x2 = x2, x3 = x3, x4 = x4),
+            prop=1-prop)
+}
+```
+
+
+
+## A Framework for Causal Inference in the Presence of Extreme Inverse Probability Weights
+
+**We shall not address the original treatment effect estimation problem. Instead, we take the data as missing data and wish to estimate the average earnings of the treated.**
+
+### Illustrative Example
+
+This is a modified example of the original one. We set $Y=Y_1$ so that the response no longer depends on $D$.
+
+```{r}
+alpha_A.gen1 = c(-2.8, 0.2, 0.8)  # p = 20% (extreme weight)
+alpha_B.gen1 = c(-1.6, 0.45, 0.6)  # p = 50%
+alpha_C.gen1 = c(0.2, 0.8, 0.2)  # p = 80%
+
+#' Model mis-speification: Ignore covariates (Set to first one)
+data.gen1 = function(N, alpha = alpha_A.gen1) {
+    x1 = rnorm(N, 2, 2)
+    x2 = rnorm(N, 1, 1)
+    
+    prop = 1 / (  1 + exp(-(alpha[1] + alpha[2] * x1 + alpha[3] * x2)) )
+    D = rbinom(N, 1, prop)
+
+    epsilon1 = rnorm(N, 0, 2)
+    # epsilon2 = rnorm(N, 0, 2)
+    # y = ifelse(D == 1, 2 + x1 + x2 + 2*x1^2 + 0.5*x2^2 + epsilon1, x1 + x2 + epsilon2)
+    y = 2 + x1 + x2 + 2*x1^2 + 0.5*x2^2 + epsilon1
+
+    return(list(data=data.frame(y, D, x1, x2), prop=prop))
+}
+
+fitted_model.gen1 = function(data) {
+    # todo
+}
+
+```
+
+### First Simulation
+
+In this case we choose the homogeneous treatment effect $\Delta=3$. Note that as we modify the setting, this will be incorporated as the intercept of the conditional mean model.
+
+```{r}
+alpha_A.gen2 = c(-0.5, 0.3, 0.4, 0.4, 0.4)  # good overlap
+alpha_B.gen2 = c(-1, 0.6, 0.8, 0.8, 0.8)  # moderate overlap
+alpha_C.gen2 = c(-1.5, 0.9, 1.2, 1,2, 1.2)  # poor overlap
+
+#' Model mis-speification: Ignore covariates (Set to first one)
+data.gen2 = function(N, alpha = alpha_C.gen2) {
+    x4 = rbinom(N, 1, 0.5)
+    x3 = rbinom(N, 1, 0.4 + 0.2*x4)
+    mu_matrix = cbind(x4 - x3 + 0.5 * x3 * x4, -x4 + x3 + x3 * x4)
+    Sigma_elements = cbind(2 - x3, 0.25 * (1 + x3))
+    x1x2 = t(sapply(1:N, function(i) {
+        Sigma_matrix <- matrix(c(Sigma_elements[i, 1], Sigma_elements[i, 2], 
+                                 Sigma_elements[i, 2], Sigma_elements[i, 1]), 2, 2)
+        mvrnorm(1, mu = mu_matrix[i, ], Sigma = Sigma_matrix)
+    }))
+    x1 = x1x2[,1]
+    x2 = x1x2[,2]
+
+    prop = 1 / (1 + exp(- (alpha[1] + alpha[2] * x1 + alpha[3] * x2 + alpha[4] * x3 + alpha[5] * x4) ))
+    D = rbinom(N, 1, prop)
+
+    epsilon = rnorm(N, 0, 1)
+    y = 0.5 + x1 + 0.6 * x2 + 2.2 * x3 + 1.2 * x4 + epsilon
+    return(list(data=data.frame(y, D, x1, x2, x3, x4), prop=prop))
+}
+
+fitted_model.gen2 = function(data) {
+    # todo
+}
+```
+
+### Second Simulation
+
+In this case we choose the heterogeneous treatment effect $\Delta=prop^2+2prop+1$. The simulation focsues on the impact of proportion of treated participants (prevalence of treatment)
+
+```{r}
+alpha.gen3 = c(0.15, 0.3, 0.3, -0.2, -0.25, -0.25)
+# low prevalence (around 0.1)
+alpha_A.gen3 = c(-2.1, alpha.gen3) # good overlap
+alpha_B.gen3 = c(-2.2, 2 * alpha_A.gen3)  # moderate overlap
+alpha_C.gen3 = c(-2.8, 3 * alpha_A.gen3)  # poor overlap
+
+#' Model mis-speification: Ignore covariates (Set to first one)
+data.gen3 = function(N, alpha = alpha_C.gen3) {
+    mu_matrix = rep(0, 6)
+    # unit marginal variance, pairwise covariance of 0.5
+    Sigma_matrix = matrix(0.5, nrow = 6, ncol = 6)
+    diag(Sigma_matrix) = 1
+    x1x2x3x4x5x6 = mvrnorm(N, mu = mu_matrix, Sigma = Sigma_matrix)
+    x1 = x1x2x3x4x5x6[,1]
+    x2 = x1x2x3x4x5x6[,2]
+    x3 = x1x2x3x4x5x6[,3]
+    x4 = x1x2x3x4x5x6[,4]
+    x5 = x1x2x3x4x5x6[,5]
+    x6 = x1x2x3x4x5x6[,6]
+    # dichotomize
+    x4 = ifelse(x4 > 0, 1, 0)
+    x5 = ifelse(x5 > 0, 1, 0)
+    x6 = ifelse(x6 > 0, 1, 0)
+
+    prop = 1 / (1 + exp(- (alpha[1] + alpha[2] * x1 + alpha[3] * x2 + alpha[4] * x3 + alpha[5] * x4 + alpha[6] * x5 + alpha[7] * x6) ))
+
+    epsilon = rnorm(N, 0, 1.5)
+    y = -0.5 * x1 - 0.5 * x2 - 1.5 * x3 + 0.8 * x4 + 0.8 * x5 + x6 + epsilon + prop^2 + 2 * prop + 1
+    return(list(data=data.frame(y, D, x1, x2, x3, x4, x5, x6), prop=prop))
+}
+
+fitted_model.gen3 = function(data) {
+    # todo
+}
+```
+
+## Bias-Reduced Doubly Robust Estimation
+
+Incorrect outcome model: $m_0(x)=1+x$
+Incorrect propensity model: $\pi_0(x)=expit(\varespilon \cdot x)$
+
+```{r}
+#' Model mis-speification: Wrong form of model
+data.gen = function() {
+    x = rnorm(N, 0, 1)
+    prop = expit(-4 + 1.5 * sqrt(abs(x)) + 0.75 * x + 0.5 * abs(x)^1.5)
+    D = rbinom(N, 1, prop)
+    y = rnorm(N, x ^ 2, 1)
+    return(list(y = y, D = D, x = x), prop=prop)
+}
+```
+
+## Valid inference for treatment effect parameters under irregular identification and many extreme propensity scores
+
+```{r}
+gamma1 = 0.5  # Regular identification
+gamma2 = 1.5  # Irregular identification, extreme weight
+# todo What form of mis-specification? I should also focus on either y0 or y1
+data.gen = function(N, gamma) {
+    x = rlogis(N)
+
+    prop = plogis(gamma * x)
+    u = rlogis(N)
+    D = ifelse(gamma * x - u > 0, 1, 0)
+
+    epsilon0 = rnorm(N)
+    epsilon1 = rnorm(N)
+    y0 = log(0.02 + 0.05*prop) + epsilon0
+    y1 = log(0.01 + 0.25*prop) + epsilon1
+    
+    y = (1 - D) * y0 + D * y1
+    return(list(y = y, D = D, x = x), prop=prop)
+}
+```
+
+
+## A Stable and More Efficient Doubly Robust Estimator
+
+```{r}
+#' Model mis-speification: Ignore covariates (Set to last one)
+data.gen = function(N) {
+    x1 = runif(N, 0, 1)
+    x2 = rnorm(N)
+    x3 = rbinom(N, 1, 0.3)
+    x4 = rlnorm(N, 0, 1) # log-normal
+
+    epsilon = rnorm(N)
+
+    prop = expit(-1 - x1/2 + x2 - x3 + x4)
+    D = rbinom(N, 1, prop)
+
+    y = 2.5 + x1 / 2 + x2 + x3 + x4 + epsilon
+
+    return(list(y = y, D = D, x1 = x1, x2 = x2, x3 = x3, x4 = x4), prop=prop)
+}
+```
+
+## Improved double-robust estimation in missing data and causal inference models
+
+There are four experiments in total:
+
+1. The first one is just the setting in demystifing paper.
+2. The second one is just the setting in *Comment: Performance of Double-Robust Estimators When "Inverse Probability" Weights Are Highly Variable* above, where we exchange the missing indicator.
+3. The third one modifies the form of Y, changing it from a linear model to a logistic model.
+4. The fourth one is the same as the third one, except we exchange the missing indicator as in (2).
+
+```{r}
+#' Model mis-speification: Wrong covariates
+data.gen1 = function(N) {
+    z1 = rnorm(N)
+    z2 = rnorm(N)
+    z3 = rnorm(N)
+    z4 = rnorm(N)
+    epsilon = rnorm(N)
+    # y = 210 + 27.4*z1 + 13.7*z2 + 13.7*z3 + 13.7*z4 + epsilon
+    y = rbinom(N, 1, expit(-60 + 27.4 * z1 + 13.7 * z2 + 13.7 * z3 + 13.7 * z4))  # change from linar to logistic
+    prop = expit(-z1 + 0.5*z2 - 0.25*z3 - 0.1*z4)  # Note that prop can be as small as 0.01
+    D = rbinom(N, 1, prop)
+
+    # wrong covariates exposed to analyst
+    x1 = exp(z1 / 2)
+    x2 = z2 / (1+exp(z1)) + 10
+    x3 = (z1 * z3 / 25 + 0.6)^3
+    x4 = (z2 + z4 + 20)^2
+
+    return(list(y = y, 
+                D = D, 
+                z1 = z1, z2 = z2, z3 = z3, z4 = z4,
+                x1 = x1, x2 = x2, x3 = x3, x4 = x4),
+            prop=prop)
+}
+```
+
+```{r}
+#' Model mis-speification: Wrong covariates
+data.gen2 = function(N) {
+    z1 = rnorm(N)
+    z2 = rnorm(N)
+    z3 = rnorm(N)
+    z4 = rnorm(N)
+    epsilon = rnorm(N)
+    # y = 210 + 27.4*z1 + 13.7*z2 + 13.7*z3 + 13.7*z4 + epsilon
+    y = rbinom(N, 1, expit(-60 + 27.4 * z1 + 13.7 * z2 + 13.7 * z3 + 13.7 * z4))  # change from linar to logistic
+    prop = expit(-z1 + 0.5*z2 - 0.25*z3 - 0.1*z4)  # Note that prop can be as small as 0.01
+    D = rbinom(N, 1, prop)
+    # * We analyze the data in which Y is observed only when D = 0
+    D = 1 - D
+
+    # wrong covariates exposed to analyst
+    x1 = exp(z1 / 2)
+    x2 = z2 / (1+exp(z1)) + 10
+    x3 = (z1 * z3 / 25 + 0.6)^3
+    x4 = (z2 + z4 + 20)^2
+
+    return(list(y = y, 
+                D = D, 
+                z1 = z1, z2 = z2, z3 = z3, z4 = z4,
+                x1 = x1, x2 = x2, x3 = x3, x4 = x4),
+            prop=1-prop)
+}
+```
+
+
+# Simulation and Analysis
+
+TODO: Make a nice plot comparing all parameters!
+
+
+# Questions
+
+1. Is it possible to include real data analysis such as Lalonde data for doubly robust case?

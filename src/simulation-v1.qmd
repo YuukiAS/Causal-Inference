@@ -1,5 +1,5 @@
 ---
-title: 'Double Robust version of ELW'
+title: 'Double Robust version of ELW: Simulation-1'
 author: 'Mingcheng Hu'
 ---
 
@@ -761,11 +761,11 @@ IPW.trim = function(y, t, prop)
     N = length(t)
     n = sum(t) 
 
-    fun1=function(t, s){  2*n*t^s*mean(prop<=t) - 1 }
+    fun1=function(b, s){  2*n*(b^s)*mean(prop<=b) - 1 }
     bn1=uniroot(fun1, c(0, 1), s=1)$root 
     bn2=uniroot(fun1, c(0, 1), s=2)$root 
 
-    fun2=function(t){  n*t^5*mean(prop<=t) - 1  }
+    fun2=function(b){  n*b^5*mean(prop<=b) - 1  }
     hn=uniroot(fun2, c(0, 1))$root  
 
     yy = rep(y, t)
@@ -798,6 +798,7 @@ DR_BR = function(y, t, x) {
     n<-length(t)
     int.x<-cbind(rep(1,n),x)
 
+    # We want to minimize this function
     min.Uint <-function(gamma) {
         -mean((-t*exp(-gamma%*%t(int.x)))+(-(1-t)*(gamma%*%t(int.x))))
     }
@@ -806,7 +807,7 @@ DR_BR = function(y, t, x) {
     }
 
     # define Estimates of parameters indexing the working model for missingness probablity
-    init.gamma<-coef(glm(t~x,family="binomial"))
+    init.gamma<-coef(glm(t~x,family="binomial"))  # initial value
     sol<-nlm(min.Uint,init.gamma)  # nonlinear minimization
     gamma.BR<-sol$estimate
     weight<-as.vector(1/exp(gamma.BR%*%t(int.x)))
