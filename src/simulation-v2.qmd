@@ -503,61 +503,79 @@ DR_Bounded_Regression = function(y, D, x, prop, impute_model_formula) {
 ```
 
 ```{r}
+result=data.gen1(N)
+data=result$data
+prop=result$prop
+y = data$y
+D = data$D
+x = data.frame(x1=data$z1, x2=data$z2, x3=data$z3, x4=data$z4)
+prop_model_formula = D ~ x1 + x2 + x3 + x4
+impute_model_formula = y ~ x1 + x2 + x3 + x4
+```
+
+```{r}
+library(CBPS)
+library(nleqslv)
+# Ref Imai, Kosuke, and Marc Ratkovic. “Covariate Balancing Propensity Score.” Journal of the Royal Statistical Society Series B: Statistical Methodology, vol. 76, no. 1, Jan. 2014, pp. 243–63. DOI.org (Crossref), https://doi.org/10.1111/rssb.12027.
+
+CBPS = function(y, D, x, prop_model_formula) {
+    # Follow the code in https://github.com/kosukeimai/CBPS/blob/master/R/CBPSMain.R
+    CBPS.fit = CBPS(prop_model_formula, ATT = 0)
+    return(mean(D*y/CBPS.fit$fitted.values))
+}
+
 # Ref Cao, Weihua, et al. “Improving Efficiency and Robustness of the Doubly Robust Estimator for a Population Mean with Incomplete Data.” Biometrika, vol. 96, no. 3, Sept. 2009, pp. 723–34. DOI.org (Crossref), https://doi.org/10.1093/biomet/asp033.
-# todo Fix it: CTD
+# Ref Equation 16
 #' Missing model: Logistic
 #' Imputation model: Linear
-# CTD = function(y, D, prop_model_formula, impute_model_formula, enhanced = FALSE, tol = = sqrt(.Machine$double.eps), max_iter = 100) {
-#     N = length(y)
+CTD = function(y, D, x, prop_model_formula, impute_model_formula) {
+    data = data.frame(y = y, D = D, x)  # Don't put x=x to keep separate columns
+    prop = glm(prop_model_formula, family = binomial, data=data)$fitted.values
+    impute_model = lm(impute_model_formula, data = subset(data, D == 1))
+    y_imputed = predict(impute_model, newdata = data)
 
-#     # Step 1: Fit the propensity model to estimate pi
-#     prop_model <- glm(prop_model_formula, family = binomial, data = D)
-#     pi_hat <- predict(prop_model, type = "response")
-    
-#     # Step 2: Fit the initial imputation model to estimate beta
-#     impute_model <- lm(impute_model_formula, data = D[D == 1, ]) # Only observed data for initial beta
-#     beta_hat <- coef(impute_model)
-    
-#     # Initialize c vector (start with zeros or another reasonable guess)
-#     c_hat <- rep(0, N) 
-    
-#     # Define convergence criteria
-#     iter <- 0
-#     converged <- FALSE
-    
-#     # Start iterative updates for beta and c
-#     while (!converged && iter < max_iter) {
-#         iter <- iter + 1
-        
-#         # Step 3: Update c given beta
-#         # Compute m_beta (partial derivative of m(X; beta) with respect to beta)
-#         m_beta <- model.matrix(impute_model_formula, data = D)
-        
-#         # Solve for c_hat
-#         residual <- y - m_beta %*% beta_hat
-#         weighted_residual <- residual * ((1 - pi_hat) / pi_hat)
-#         c_hat <- solve(t(m_beta) %*% weighted_residual, t(m_beta) %*% residual)
-        
-#         # Step 4: Update beta given c
-#         # Update imputation model with adjusted outcome
-#         adjusted_y <- y - c_hat %*% pi_hat / (1 - pi_hat)
-#         new_impute_model <- lm(impute_model_formula, data = D[D == 1, ], weights = 1/pi_hat[D == 1])
-#         new_beta_hat <- coef(new_impute_model)
-        
-#         # Check for convergence
-#         if (max(abs(new_beta_hat - beta_hat)) < tol && max(abs(c_hat - c_hat)) < tol) {
-#             converged <- TRUE
-#         } else {
-#             beta_hat <- new_beta_hat
-#         }
-#     }
-    
-#     # Return estimated beta and c
-#     list(beta = beta_hat, c = c_hat, iterations = iter, converged = converged)
+    # p+q dimensions in total
+    x_impute = model.matrix(impute_model_formula, data = data.frame(y, x))
+    p = ncol(x_impute)
+    m_beta = x_impute  # derivative of imputation model w.r.t beta
+    x_prop = model.matrix(prop_model_formula, data = data.frame(D, x))
+    q = ncol(x_prop)
+    pi_theta = prop * (1 - prop) * x_prop    # derivative of missing model w.r.t theta
 
+    term1 = D / prop   # N*1
+    term2 = (1 - prop) / prop  # N*1
+    term3.1 = m_beta  # N*p
+    term3.2 = pi_theta / (1 - prop)  # N*q
 
-# }
+    estimating_equations <- function(params) {
+        beta <- params[1:p]
+        c <- params[(p + 1):(p + q)]
 
+        y_imputed_beta = m_beta %*% beta
+        term4 = y - y_imputed_beta - (pi_theta %*% c) / (1 - prop)  # N*1
+
+        eq_beta <- colSums(sweep(term3.1, 1, term1 * term2 * term4, `*`))
+        eq_c <- colSums(sweep(term3.2, 1, term1 * term2 * term4, `*`))
+        # eq_beta <- colSums(term1 * term2 * term3.1 * term4)
+        # eq_c <- colSums(term1 * term2 * term3.2 * term4)
+        equations = c(eq_beta, eq_c)
+
+        return(equations)
+    }
+
+    beta_init = coef(lm(impute_model_formula, data = subset(data, D == 1)))
+    init_params <- c(beta_init, rep(0, q))
+    solution <- nleqslv(init_params, estimating_equations)
+
+    beta_final = solution$x[1:p]
+    c = solution$x[(p + 1):(p + q)]
+
+    y_imputed_final = m_beta %*% beta_final
+
+    # print(beta_init)
+    # print(beta_final)
+    return(AIPW(y, D, prop, y_imputed_final))
+}
 
 # Ref Zhang, Min, and Baqun Zhang. “A Stable and More Efficient Doubly Robust Estimator.” Statistica Sinica, 2022. DOI.org (Crossref), https://doi.org/10.5705/ss.202019.0265.
 # * We use the setting in Section 4, where there are three options of hn
@@ -601,16 +619,6 @@ ZZ = function(y, D, prop, y_imputed, hn_power, progress_bar = FALSE) { # h_n is 
     mu <- numerator_sum / N
     return(mu)
 }
-```
-
-```{r}
-# Ref Rotnitzky, A., et al. “Improved Double-Robust Estimation in Missing Data and Causal Inference Models.” Biometrika, vol. 99, no. 2, June 2012, pp. 439–56. DOI.org (Crossref), https://doi.org/10.1093/biomet/ass013.
-# todo
-```
-
-```{r}
-# Ref “Multiply Robust Imputation Procedures for the Treatment of Item Nonresponse in Surveys.” Biometrika, 2017. DOI.org (Crossref), https://doi.org/10.1093/biomet/asx007.
-# todo
 ```
 
 
@@ -948,3 +956,6 @@ TODO: Make a nice plot comparing all parameters!
 
 1. Is it possible to include real data analysis such as Lalonde data for doubly robust case?
 2. Do I need to use Bootstrap for standard deviation, rather than the direct procedure here?
+3. Two methods I don't know how to implement yet:
+    + Rotnitzky, A., et al. “Improved Double-Robust Estimation in Missing Data and Causal Inference Models.” Biometrika, vol. 99, no. 2, June 2012, pp. 439–56. DOI.org (Crossref), https://doi.org/10.1093/biomet/ass013.
+    + “Multiply Robust Imputation Procedures for the Treatment of Item Nonresponse in Surveys.” Biometrika, 2017. DOI.org (Crossref), https://doi.org/10.1093/biomet/asx007.
