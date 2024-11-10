@@ -28,14 +28,14 @@ N_small = 5000
 
 # Implementing Estimators
 
-```{r label = "Utility Functions"}
+```{r}
 expit = function(x) 1 / (1 + exp(-x))
 logit = function(p) log(p / (1 - p))
 ```
 
 ## Non-DR Estimators
 
-```{r}
+```{r label = "Non-DR Estimators Definitions"}
 #' Missing model: Any
 #' Imputation model: Any
 IPW = function(y, D, prop) {
@@ -319,7 +319,7 @@ ELW = function(y, D, prop, tol = sqrt(.Machine$double.eps)) { # tol is the toler
 
 ## DR Estimators
 
-```{r}
+```{r label = "DR Estimators Definitions"}
 # * This is also BC (bias corrected)-OLS in demystifing paper, Table 5
 # * This is also mu_DR(pi, m_REG) in the comment for demystifing paper
 #' Missing model: Any
@@ -766,14 +766,13 @@ data.gen2 = function(N) {
     x3 = (z1 * z3 / 25 + 0.6)^3
     x4 = (z2 + z4 + 20)^2
 
+    data = list(
+        y = y, D = D,
+        z1 = z1, z2 = z2, z3 = z3, z4 = z4,
+        x1 = x1, x2 = x2, x3 = x3, x4 = x4
+    )
     return(
-        list(
-            y = y,
-            D = D,
-            z1 = z1, z2 = z2, z3 = z3, z4 = z4,
-            x1 = x1, x2 = x2, x3 = x3, x4 = x4
-        ),
-        prop = 1 - prop
+        list(data = data, prop = 1 - prop)
     )
 }
 
@@ -839,7 +838,7 @@ alpha_B.gen3 = c(-1.6, 0.45, 0.6) # p = 50%
 alpha_C.gen3 = c(0.2, 0.8, 0.2) # p = 80%
 
 #' Model mis-speification: Ignore covariates (Set to first one)
-data.gen3 = function(N, alpha = alpha_A.gen1) {
+data.gen3 = function(N, alpha = alpha_A.gen3) {
     x1 = rnorm(N, 2, 2)
     x2 = rnorm(N, 1, 1)
 
@@ -851,7 +850,11 @@ data.gen3 = function(N, alpha = alpha_A.gen1) {
     # y = ifelse(D == 1, 2 + x1 + x2 + 2*x1^2 + 0.5*x2^2 + epsilon1, x1 + x2 + epsilon2)
     y = 2 + x1 + x2 + 2 * x1^2 + 0.5 * x2^2 + epsilon1
 
-    return(list(data = data.frame(y, D, x1, x2), prop = prop))
+    data = list(
+        y = y, D = D,
+        x1 = x1, x2 = x2
+    )
+    return(list(data = data, prop = prop))
 }
 
 Fitted.model3 = setRefClass("Fitted.model3",
@@ -918,7 +921,12 @@ data.gen4 = function(N, alpha = alpha_C.gen4) {
 
     epsilon = rnorm(N, 0, 1)
     y = 0.5 + x1 + 0.6 * x2 + 2.2 * x3 + 1.2 * x4 + epsilon
-    return(list(data = data.frame(y, D, x1, x2, x3, x4), prop = prop))
+
+    data = list(
+        y = y, D = D,
+        x1 = x1, x2 = x2, x3 = x3, x4 = x4
+    )
+    return(list(data = data, prop = prop))
 }
 
 Fitted.model4 = setRefClass("Fitted.model4",
@@ -988,10 +996,16 @@ data.gen5 = function(N, alpha = alpha_C.gen5) {
     x6 = ifelse(x6 > 0, 1, 0)
 
     prop = 1 / (1 + exp(-(alpha[1] + alpha[2] * x1 + alpha[3] * x2 + alpha[4] * x3 + alpha[5] * x4 + alpha[6] * x5 + alpha[7] * x6)))
+    D = rbinom(N, 1, prop)
 
     epsilon = rnorm(N, 0, 1.5)
     y = -0.5 * x1 - 0.5 * x2 - 1.5 * x3 + 0.8 * x4 + 0.8 * x5 + x6 + epsilon + prop^2 + 2 * prop + 1
-    return(list(data = data.frame(y, D, x1, x2, x3, x4, x5, x6), prop = prop))
+
+    data = list(
+        y = y, D = D,
+        x1 = x1, x2 = x2, x3 = x3, x4 = x4, x5 = x5, x6 = x6
+    )
+    return(list(data = data, prop = prop))
 }
 
 Fitted.model5 = setRefClass("Fitted.model5",
@@ -1070,7 +1084,8 @@ data.gen6 = function(N) {
 
     y = 2.5 + x1 / 2 + x2 + x3 + x4 + epsilon
 
-    return(list(y = y, D = D, x1 = x1, x2 = x2, x3 = x3, x4 = x4), prop = prop)
+    data = list(y = y, D = D, x1 = x1, x2 = x2, x3 = x3, x4 = x4)
+    return(list(data = data, prop = prop))
 }
 
 Fitted.model6 = setRefClass("Fitted.model6",
@@ -1126,7 +1141,11 @@ data.gen7 = function(N) {
     prop = expit(-4 + 1.5 * sqrt(abs(x)) + 0.75 * x + 0.5 * abs(x)^1.5)
     D = rbinom(N, 1, prop)
     y = rnorm(N, x^2, 1)
-    return(list(y = y, D = D, x = x), prop = prop)
+
+    data = list(
+        y = y, D = D, x = x
+    )
+    return(list(data = data, prop = prop))
 }
 
 Fitted.model7 = setRefClass("Fitted.model7",
@@ -1188,14 +1207,13 @@ data.gen8 = function(N) {
     x3 = (z1 * z3 / 25 + 0.6)^3
     x4 = (z2 + z4 + 20)^2
 
+    data = list(
+        y = y, D = D,
+        z1 = z1, z2 = z2, z3 = z3, z4 = z4,
+        x1 = x1, x2 = x2, x3 = x3, x4 = x4
+    )
     return(
-        list(
-            y = y,
-            D = D,
-            z1 = z1, z2 = z2, z3 = z3, z4 = z4,
-            x1 = x1, x2 = x2, x3 = x3, x4 = x4
-        ),
-        prop = prop
+        list(data = data,prop = prop)
     )
 }
 
@@ -1273,14 +1291,13 @@ data.gen9 = function(N) {
     x3 = (z1 * z3 / 25 + 0.6)^3
     x4 = (z2 + z4 + 20)^2
 
+    data = list(
+        y = y, D = D,
+        z1 = z1, z2 = z2, z3 = z3, z4 = z4,
+        x1 = x1, x2 = x2, x3 = x3, x4 = x4
+    )
     return(
-        list(
-            y = y,
-            D = D,
-            z1 = z1, z2 = z2, z3 = z3, z4 = z4,
-            x1 = x1, x2 = x2, x3 = x3, x4 = x4
-        ),
-        prop = 1 - prop
+        list(data = data, prop = 1 - prop)
     )
 }
 
@@ -1351,10 +1368,9 @@ Fitted.model9 = setRefClass("Fitted.model9",
 + CTD: Estimate Nuisance Parameters
 + ZZ: Avoid Directly Inverse Weights
 
-```{r}
+```{r label = "Utility Functions"}
 library(ggplot2)
 
-# Util function
 plot_prop_histogram = function(prop, title) {
     # hist(prop, breaks = 20, main = title, xlab = "Propensity Score")
 
@@ -1366,9 +1382,9 @@ plot_prop_histogram = function(prop, title) {
 }
 ```
 
-```{r}
-N = N_normal
-data_all = list(
+```{r label = "Generating Data", cached = TRUE}
+N = N_normal  # modify for different size of data
+data.all = list(
     demystifing1 = data.gen1(N),  # linear imputation
     demystifing2 = data.gen2(N),  # linear imputation
     framework1 = data.gen3(N),  # linear imputation
@@ -1381,44 +1397,37 @@ data_all = list(
 )
 ```
 
-```{r}
+```{r label = "Histogram of Propensity Scores"}
 prop_histogram_all = list(
-    demystifing1 = plot_prop_histogram(data_all$demystifing1$prop, "Demystifying 1"),
-    demystifing2 = plot_prop_histogram(data_all$demystifing2$prop, "Demystifying 2"),
-    framework1 = plot_prop_histogram(data_all$framework1$prop, "Framework 1"),
-    framework2 = plot_prop_histogram(data_all$framework2$prop, "Framework 2"),
-    framework3 = plot_prop_histogram(data_all$framework3$prop, "Framework 3"),
-    stable_eff = plot_prop_histogram(data_all$stable_eff$prop, "Stable and Efficient"),
-    br = plot_prop_histogram(data_all$br$prop, "Bias-Reduced"),
-    improved_DR1 = plot_prop_histogram(data_all$improved_DR1$prop, "Improved DR 1"),
-    improved_DR2 = plot_prop_histogram(data_all$improved_DR2$prop, "Improved DR 2")
+    demystifing1 = plot_prop_histogram(data.all$demystifing1$prop, "Demystifying 1"),
+    demystifing2 = plot_prop_histogram(data.all$demystifing2$prop, "Demystifying 2"),
+    framework1 = plot_prop_histogram(data.all$framework1$prop, "Framework 1"),
+    framework2 = plot_prop_histogram(data.all$framework2$prop, "Framework 2"),
+    framework3 = plot_prop_histogram(data.all$framework3$prop, "Framework 3"),
+    stable_eff = plot_prop_histogram(data.all$stable_eff$prop, "Stable and Efficient"),
+    br = plot_prop_histogram(data.all$br$prop, "Bias-Reduced"),
+    improved_DR1 = plot_prop_histogram(data.all$improved_DR1$prop, "Improved DR 1 (Demystifying 3)"),
+    improved_DR2 = plot_prop_histogram(data.all$improved_DR2$prop, "Improved DR 2 (Demystifying 4)")
 )
 ```
 
-```{r}
-fitted_model_all = list(
-    demystifing1 = do.call(Fitted.model1$new, data_all$demystifing1),
+```{r label = "Fitted Models"}
+fitted_model.all = list(
+    demystifing1 = do.call(Fitted.model1$new, data.all$demystifing1$data),
+    demystifing2 = do.call(Fitted.model2$new, data.all$demystifing2$data),
+    framework1 = do.call(Fitted.model3$new, data.all$framework1$data),
+    framework2 = do.call(Fitted.model4$new, data.all$framework2$data),
+    framework3 = do.call(Fitted.model5$new, data.all$framework3$data),
+    stable_eff = do.call(Fitted.model6$new, data.all$stable_eff$data),
+    br = do.call(Fitted.model7$new, data.all$br$data),
+    improved_DR1 = do.call(Fitted.model8$new, data.all$improved_DR1$data),
+    improved_DR2 = do.call(Fitted.model9$new, data.all$improved_DR2$data)
 )
 ```
 
-```{r}
-# IPW = function(y, D, prop)
-# SIPW_POP = function(y, D, prop)
-# SIPW_NR = function(y, D, prop)
-# Strat_Pi_matrix = function(y, D, prop, S = 5) 
-# OLS = function(y, D, x, impute_model_formula)  <- linear imputation
-# Strat_Pi_y = function(y, D, prop, y_imputed, S = 5) 
-# IPW.zzz = function(y, D, prop) 
-# IPW.chim = function(y, D, prop)
-# IPW.trim = function(y, D, prop)
-# OW = function(y, D, prop)
-# MW = function(y, D, prop)
-# EW = function(y, D, prop)
-# BW = function(y, D, prop, nu) -> nu = 11 or 81
-# ELW = function(y, D, prop)
-
+```{r label = "Non-DR Estimators Instantiation"}
 #' Imputation model: Linear
-Non_DR_Estimators.linear = c(
+Non_DR_Estimators.linear = list(
     IPW,
     SIPW_POP,
     SIPW_NR,
@@ -1437,7 +1446,7 @@ Non_DR_Estimators.linear = c(
 )
 
 #' Imputation model: Logistic
-Non_DR_Estimators.logistic = c(
+Non_DR_Estimators.logistic = list(
     IPW,
     SIPW_POP,
     SIPW_NR,
@@ -1455,23 +1464,11 @@ Non_DR_Estimators.logistic = c(
 )
 ```
 
-```{r}
-# AIPW = function(y, D, prop, y_imputed)
-# AIPW_Stablized = function(y, D, prop, y_imputed)
-# WLS = function(y, D, x, prop, impute_model_formula) <- linear imputation
-# Pi_Cov_1 = function(y, D, x, prop, impute_model_formula) <- linear imputation
-# Pi_Cov_2 = function(y, D, x, prop, impute_model_formula) <- linear imputation
-# TMLE = function(y, D, x, prop_model_formula, impute_model_formula)
-# DR_BR = function(y, D, x, type) <- linear/logistic imputation
-# ELW_DR = function(y, D, prop, y_imputed)
-# DR_Bounded_IPW = function(y, D, x, prop_model_formula, impute_model_formula)
-# DR_Bounded_Regression = function(y, D, x, prop, impute_model_formula) <- linear imputation
-# CBPS = function(y, D, x, prop_model_formula)
-# CTD = function(y, D, x, prop_model_formula, impute_model_formula) <- linear imputation
-# ZZ = function(y, D, prop, y_imputed, hn_power) -> hn_power = -1/3, -1/4 or -1/5
 
+
+```{r label = "DR Estimators Instantiation"}
 #' Imputation model: Linear
-DR_Estimators.linear = c(
+DR_Estimators.linear = list(
     AIPW,
     AIPW_Stablized,
     WLS,
@@ -1490,7 +1487,7 @@ DR_Estimators.linear = c(
 
 
 #' Imputation model: Logistic
-DR_Estimators.logistic = c(
+DR_Estimators.logistic = list(
     AIPW,
     AIPW_Stablized,
     TMLE,
@@ -1502,9 +1499,38 @@ DR_Estimators.logistic = c(
 )
 ```
 
+## Both Models are Correct
+
+```{r}
+params.all = list(
+    demystifing1 = do.call(Fitted.model1$new, data.all$demystifing1$data),
+    demystifing2 = do.call(Fitted.model2$new, data.all$demystifing2$data),
+    framework1 = do.call(Fitted.model3$new, data.all$framework1$data),
+    framework2 = do.call(Fitted.model4$new, data.all$framework2$data),
+    framework3 = do.call(Fitted.model5$new, data.all$framework3$data),
+    stable_eff = do.call(Fitted.model6$new, data.all$stable_eff$data),
+    br = do.call(Fitted.model7$new, data.all$br$data),
+    improved_DR1 = do.call(Fitted.model8$new, data.all$improved_DR1$data),
+    improved_DR2 = do.call(Fitted.model9$new, data.all$improved_DR2$data)
+)
+```
+
+## Missing Model is Incorrect
+
 ```{r}
 
 ```
+
+
+## Imputation Model is Incorrect
+
+
+```{r}
+
+```
+
+
+## Both Models are incorrect
 
 ```{r}
 
