@@ -3,10 +3,12 @@ title: 'Double Robust version of ELW: Simulation-2'
 author: 'Mingcheng Hu'
 ---
 
+
 # Set Up Environment
 
+
 ```{r}
-# install.packages("pbmcapply", repos = "https://cran.r-project.org")
+install.packages("pbmcapply", repos = "https://cran.r-project.org")
 ```
 
 ```{r include = FALSE}
@@ -26,8 +28,7 @@ num_cores = detectCores() - 1
 
 ```{r label = "Constants"}
 nrep_large = 2000
-nrep_normal = 500
-nrep_small = 50
+nrep_small = 500
 
 N_large = 100000
 N_normal = 20000
@@ -39,14 +40,18 @@ N = N_normal  # modify for different size of data
 
 
 
+
 # Implementing Estimators
+
 
 ```{r}
 expit = function(x) 1 / (1 + exp(-x))
 logit = function(p) log(p / (1 - p))
 ```
 
+
 ## Non-DR Estimators
+
 
 ```{r label = "Non-DR Estimators Definitions"}
 #' Missing model: Any
@@ -56,7 +61,6 @@ IPW = function(y, D, prop) {
     return(sum(D / prop * y) / N)
 }
 ```
-
 
 ```{r}
 # Ref Kang, Joseph D. Y., and Joseph L. Schafer. “Demystifying Double Robustness: A Comparison of Alternative Strategies for Estimating a Population Mean from Incomplete Data.” Statistical Science, vol. 22, no. 4, Nov. 2007. DOI.org (Crossref), https://doi.org/10.1214/07-STS227.
@@ -310,7 +314,6 @@ BW = function(y, D, prop, nu) {
 }
 ```
 
-
 ```{r}
 # Ref Liu, Yukun. “Biased-Sample Empirical Likelihood Weighting for Missing Data Problems: An Alternative to Inverse Probability Weighting.” Statistical Methodology, vol. 85, no. 1, 2023.
 #' Missing model: Any
@@ -336,7 +339,9 @@ ELW = function(y, D, prop, tol = sqrt(.Machine$double.eps)) { # tol is the toler
 }
 ```
 
+
 ## DR Estimators
+
 
 ```{r label = "DR Estimators Definitions"}
 # * This is also BC (bias corrected)-OLS in demystifing paper, Table 5
@@ -397,7 +402,6 @@ Pi_Cov_2 = function(y, D, x, prop, impute_model_formula) {
     return(mean(predict(impute_model, newdata = data)))
 }
 ```
-
 
 ```{r}
 library(tmle) # Tested on version 1.3.0-1, not working on latest version
@@ -496,7 +500,6 @@ DR_BR = function(y, D, x, prop_model_formula, impute_model_formula, type) {
     return(mn.y)
 }
 ```
-
 
 ```{r}
 m.biasreducedDR.identity<-function(R,Y,cov){ 
@@ -723,11 +726,13 @@ ZZ_optimized <- function(y, D, prop, y_imputed, hn_power) {
 ```
 
 
+
 # Various Data Generation Mechanisms with Extreme with Extreme Weights
 
 For the incorrect models, we follow the convention in *A Framework for Causal Inference in the Presence of Extreme Inverse Probability Weights* and omit the first covariate.
 
 In order to make use of the estimators defined above, we need to supply `prop`, `y_imputed`, `prop_model_formula` and `impute_model_formula` for each data generation mechanism. We will provide a list through `fitted_model`.
+
 
 
 ```{r}
@@ -773,9 +778,11 @@ Fitted.model0 = setRefClass("Fitted.model0",
 )
 ```
 
+
 ## Demystifying Double Robustness: A Comparison of Alternative Strategies for Estimating a Population Mean from Incomplete Data & Comment: Performance of Double-Robust Estimators When "Inverse Probability" Weights Are Highly Variable
 
 The simulation 1 is proposed in demystifing paper. This is a standard scenario and has been widely used in a variety of related papers.
+
 
 ```{r}
 #' Model mis-speification: Wrong covariates
@@ -850,7 +857,9 @@ Fitted.model1 = setRefClass("Fitted.model1",
 ```
 
 
+
 The simulation 2 is a modification of the original one. We change the setting from $D=1$ being the respondents to $D=0$ being the respondents. This is proposed in the comment paper, designed so that OLS estimator no longer performs better than DR estimators.
+
 
 
 ```{r}
@@ -932,6 +941,7 @@ Fitted.model2 = setRefClass("Fitted.model2",
 
 
 
+
 ## A Framework for Causal Inference in the Presence of Extreme Inverse Probability Weights
 
 **We shall not address the original treatment effect estimation problem. Instead, we take the data as missing data and wish to estimate the average earnings of the treated.**
@@ -939,6 +949,7 @@ Fitted.model2 = setRefClass("Fitted.model2",
 ### Illustrative Example
 
 This is a modified example of the original one. We set $Y=Y_1$ so that the response no longer depends on $D$.
+
 
 ```{r}
 alpha_A.gen3 = c(-2.8, 0.2, 0.8) # p = 20% (extreme weight)
@@ -999,9 +1010,11 @@ Fitted.model3 = setRefClass("Fitted.model3",
 )
 ```
 
+
 ### First Simulation
 
 In this case we choose the homogeneous treatment effect $\Delta=3$. Note that as we modify the setting, this will be incorporated as the intercept of the conditional mean model.
+
 
 ```{r}
 alpha_A.gen4 = c(-0.5, 0.3, 0.4, 0.4, 0.4) # good overlap
@@ -1074,9 +1087,11 @@ Fitted.model4 = setRefClass("Fitted.model4",
 )
 ```
 
+
 ### Second Simulation
 
 In this case we choose the heterogeneous treatment effect $\Delta=prop^2+2prop+1$. The simulation focsues on the impact of proportion of treated participants (prevalence of treatment)
+
 
 ```{r}
 alpha.gen5 = c(0.15, 0.3, 0.3, -0.2, -0.25, -0.25)
@@ -1177,7 +1192,9 @@ Fitted.model5 = setRefClass("Fitted.model5",
 )
 ```
 
+
 ## A Stable and More Efficient Doubly Robust Estimator
+
 
 ```{r}
 #' Model mis-speification: Ignore covariates (Set to last one) as in paper
@@ -1235,6 +1252,7 @@ Fitted.model6 = setRefClass("Fitted.model6",
 )
 ```
 
+
 ## Bias-Reduced Doubly Robust Estimation
 
 Scenario 1 is the same as demystifing paper.
@@ -1243,6 +1261,7 @@ Scenario 1 is the same as demystifing paper.
 
 Incorrect outcome model: $m_0(x)=1+x$
 Incorrect propensity model: $\pi_0(x)=expit(\varespilon \cdot x)$
+
 
 ```{r}
 #' Model mis-speification: Wrong form of model
@@ -1289,6 +1308,7 @@ Fitted.model7 = setRefClass("Fitted.model7",
 )
 ```
 
+
 ## Improved double-robust estimation in missing data and causal inference models
 
 There are four experiments in total:
@@ -1297,6 +1317,7 @@ There are four experiments in total:
 2. The second one is just the setting in *Comment: Performance of Double-Robust Estimators When "Inverse Probability" Weights Are Highly Variable* above, where we exchange the missing indicator.
 3. The third one modifies the form of Y, changing it from a linear model to a logistic model.
 4. The fourth one is the same as the third one, except we exchange the missing indicator as in (2).
+
 
 ```{r}
 #' Model mis-speification: Wrong covariates
@@ -1468,6 +1489,7 @@ Fitted.model9 = setRefClass("Fitted.model9",
 ```
 
 
+
 # Simulation and Analysis
 
 + IPW.zzz: IPW Truncated
@@ -1479,6 +1501,7 @@ Fitted.model9 = setRefClass("Fitted.model9",
 + CBPS: Propensity Scores Methods
 + CTD: Estimate Nuisance Parameters
 + ZZ: Avoid Directly Inverse Weights
+
 
 ```{r label = "Utility Functions"}
 plot_prop_histogram = function(prop, title) {
@@ -1548,7 +1571,6 @@ obtain_results = function(params, estimators) {
 }
 ```
 
-
 ```{r label = "Non-DR Estimators Instantiation"}
 #' Imputation model: Linear
 Non_DR_Estimators.linear = list(
@@ -1590,8 +1612,6 @@ Non_DR_Estimators.logistic = list(
 )
 ```
 
-
-
 ```{r label = "DR Estimators Instantiation"}
 #' Imputation model: Linear
 DR_Estimators.linear = list(
@@ -1627,7 +1647,9 @@ DR_Estimators.logistic = list(
 )
 ```
 
+
 ## True Mean
+
 
 ```{r label = "True Mean: Generating Data", cached = TRUE}
 # define Generate data in the largest size to calculate the true population mean
@@ -1661,7 +1683,6 @@ prop_histogram_all = list(
 )
 ```
 
-
 ```{r label = "True Mean: Fitting Model"}
 fitted_model_true.linear = list(
     demystifing1 = do.call(Fitted.model1$new, data_true.linear$demystifing1$data),
@@ -1678,7 +1699,6 @@ fitted_model_true.logistic = list(
     improved_DR2 = do.call(Fitted.model9$new, data_true.logistic$improved_DR2$data)
 )
 ```
-
 
 ```{r label = "True Mean: Obtaining Results"}
 # no need to obtain parameters from fitted models
@@ -1703,7 +1723,9 @@ results_true.logistic = list(
 # No need to analyze them as well
 ```
 
+
 ## Both Models are Correct
+
 
 ```{r label = "Both Correct: Generating Data", cached = TRUE}
 data_11.linear = pbmclapply(1:n_rep, function(i) {
@@ -1787,6 +1809,7 @@ save(data_11.linear,
 
 ```
 
+
 ## Missing Model is Incorrect
 
 
@@ -1809,3 +1832,4 @@ TODO: Make a nice plot comparing all parameters!
     + Rotnitzky, A., et al. “Improved Double-Robust Estimation in Missing Data and Causal Inference Models.” Biometrika, vol. 99, no. 2, June 2012, pp. 439–56. DOI.org (Crossref), https://doi.org/10.1093/biomet/ass013.
     + “Multiply Robust Imputation Procedures for the Treatment of Item Nonresponse in Surveys.” Biometrika, 2017. DOI.org (Crossref), https://doi.org/10.1093/biomet/asx007.
 4. ZZ estimator is $O(N^2)$ and I don't know whether it can be further optimzied.
+
