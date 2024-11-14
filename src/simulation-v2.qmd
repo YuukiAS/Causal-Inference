@@ -1,27 +1,35 @@
 ---
 title: 'Double Robust version of ELW: Simulation-2'
 author: 'Mingcheng Hu'
+toc: true
+toc-title: "Table of Contents"
 ---
 
 # Set Up Environment
 
-```{r}
-# install.packages("pbmcapply", repos = "https://cran.r-project.org")
-```
-
 ```{r include = FALSE}
 library(MASS)
+
 library(knitr)
 library(knitrProgressBar)
+library(kableExtra)
+
 library(ggplot2)
 library(dplyr)
+library(purrr)
+library(tidyr)
+library(viridis)  # palette for boxplot
+
 library(parallel)
-library(pbmcapply)  # wrap mclapply with progress bar
+library(mcprogress)  # wrap mclapply with progress bar.
 
 set.seed(1234)
 options(digits = 6)
+options(mc.cores = detectCores() - 1)
+```
 
-num_cores = detectCores() - 1
+```{r include = FALSE}
+setwd("/work/users/y/u/yuukias/Causal-Inference/src")
 ```
 
 ```{r label = "Constants"}
@@ -33,7 +41,7 @@ N_large = 100000
 N_normal = 20000
 N_small = 5000
 
-n_rep = nrep_small  # modify for different number of replications
+n_rep = nrep_normal  # modify for different number of replications
 N = N_normal  # modify for different size of data
 ```
 
@@ -1546,6 +1554,52 @@ obtain_results = function(params, estimators) {
     names(results) = names(estimators)
     return(results)
 }
+
+#' Analyze the estimates for one scenario, return a table of summary statistics and a boxplot
+#' @param results List of estimates,each result is a vector, corresponding to estimators
+#' @param mean The true mean in the setting
+analyze_estimates = function(results, mean, caption = NULL) {
+    # seq_along(results[[1]]) give a sequence of 1 to length(results[[1]])
+    # .x gets the x-th element of the sequence
+    # map_dbl(.x, .f) applies a function to each element of a list
+    names.estimators = names(results[[1]])
+    mean.estimators = map_dbl(seq_along(results[[1]]), ~ mean(map_dbl(results, .x)))
+    bias.estimators = mean.estimators - mean
+    var.estimators = map_dbl(seq_along(results[[1]]), ~ var(map_dbl(results, .x)))
+    rmse.estimators = sqrt(var.estimators + bias.estimators^2)
+
+    df.estimators = data.frame(
+        Names=names.estimators,
+        Bias=bias.estimators,
+        Variance=var.estimators,
+        RMSE=rmse.estimators
+    )
+
+    table = kable(df.estimators, caption)
+
+    
+    df.results =  map_dfr(results, ~ {
+        tibble(Value = .x, Estimator = names(.x))
+    })
+
+    fig = ggplot(df.results, aes(x = Estimator, y = Value, fill = Estimator)) +
+        geom_boxplot(outlier.shape = 21, outlier.size = 2, outlier.color = "red", alpha = 0.8) +
+        theme_minimal(base_size = 14) +
+        scale_fill_viridis(discrete = TRUE, option = "D") +
+        labs(
+            title = caption,
+            x = "Estimator",
+            y = "Values",
+            fill = "Estimator"
+        ) +
+        theme(
+            plot.title = element_text(hjust = 0.5, face = "bold"),
+            axis.text.x = element_text(angle = 45, hjust = 1),
+            legend.position = "none"
+        )
+
+    return(list(table = table, fig = fig))
+}
 ```
 
 
@@ -1629,7 +1683,7 @@ DR_Estimators.logistic = list(
 
 ## True Mean
 
-```{r label = "True Mean: Generating Data", cached = TRUE}
+```{r label = "True Mean: Generating Data"}
 # define Generate data in the largest size to calculate the true population mean
 data_true.linear = list(
     demystifing1 = data.gen1(N_large),  # linear imputation
@@ -1680,10 +1734,10 @@ fitted_model_true.logistic = list(
 ```
 
 
-```{r label = "True Mean: Obtaining Results"}
+```{r label = "True Mean: Obtaining Estimates"}
 # no need to obtain parameters from fitted models
 
-results_true.linear = list(
+estimates_true.linear = list(
     demystifing1 = mean(fitted_model_true.linear$demystifing1$y),
     demystifing2 = mean(fitted_model_true.linear$demystifing2$y),
     framework1 = mean(fitted_model_true.linear$framework1$y),
@@ -1693,20 +1747,44 @@ results_true.linear = list(
     br = mean(fitted_model_true.linear$br$y)
 )
 
-results_true.logistic = list(
+estimates_true.logistic = list(
     improved_DR1 = mean(fitted_model_true.logistic$improved_DR1$y),
     improved_DR2 = mean(fitted_model_true.logistic$improved_DR2$y)
 )
 
-# todo make a one-row table
-
 # No need to analyze them as well
 ```
 
+
+```{r label = "True Mean: Visualization", output = "asis"}
+df_true.all = data.frame(
+    Mean= c(unlist(estimates_true.linear), unlist(estimates_true.logistic)),
+    Images = c("Demystifying 1", 
+                "Demystifying 2", 
+                "Framework 1", 
+                "Framework 2", 
+                "Framework 3", 
+                "Stable and Efficient", 
+                "Bias-Reduced", 
+                "Improved DR 1 (Demystifying 3)", 
+                "Improved DR 2 (Demystifying 4)")
+)
+df_true.all$ImagePaths = paste0('<img src="./img/', df_true.all$Images, '.png" width="100" />')
+
+df_true_transposed.all <- data.frame(t(df_true.all[c("Mean", "ImagePaths")]))
+colnames(df_true_transposed.all) <- df_true.all$Images
+rownames(df_true_transposed.all) <- c("Mean", "Histogram of Propensity Scores")
+
+kable(df_true_transposed.all, escape = FALSE) %>%
+  kable_styling()
+```
+
+
 ## Both Models are Correct
 
-```{r label = "Both Correct: Generating Data", cached = TRUE}
-data_11.linear = pbmclapply(1:n_rep, function(i) {
+```{r label = "Both Correct: Generating Data"}
+# a list of n_rep elements, each element is also a list of lists (triple lists)
+data_11.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = data.gen1(N),
         demystifing2 = data.gen2(N),
@@ -1716,18 +1794,18 @@ data_11.linear = pbmclapply(1:n_rep, function(i) {
         stable_eff = data.gen6(N),
         br = data.gen7(N)
     )
-}, mc.cores = num_cores)  # a list of n_rep elements, each element is also a list of lists (triple lists)
+}, title = "data_11.linear")
 
-data_11.lgistic = pbmclapply(1:n_rep, function(i) {
+data_11.logistic = pmclapply(1:n_rep, function(i) {
     list(
         improved_DR1 = data.gen8(N),
         improved_DR2 = data.gen9(N)
     )
-}, mc.cores = num_cores)
+}, title = "data_11.logistic")
 ```
 
-```{r label = "Both Correct: Fitting Model", cached = TRUE}
-fitted_model_11.linear = pbmclapply(1:n_rep, function(i) {
+```{r label = "Both Correct: Fitting Model"}
+fitted_model_11.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = do.call(Fitted.model1$new, data_11.linear[[i]]$demystifing1$data),
         demystifing2 = do.call(Fitted.model2$new, data_11.linear[[i]]$demystifing2$data),
@@ -1737,18 +1815,18 @@ fitted_model_11.linear = pbmclapply(1:n_rep, function(i) {
         stable_eff = do.call(Fitted.model6$new, data_11.linear[[i]]$stable_eff$data),
         br = do.call(Fitted.model7$new, data_11.linear[[i]]$br$data)
     )
-}, mc.cores = num_cores)
+}, title = "fitted_model_11.linear")
 
-fitted_model_11.logistic = pbmclapply(1:n_rep, function(i) {
+fitted_model_11.logistic = pmclapply(1:n_rep, function(i) {
     list(
         improved_DR1 = do.call(Fitted.model8$new, data_11.logistic[[i]]$improved_DR1$data),
         improved_DR2 = do.call(Fitted.model9$new, data_11.logistic[[i]]$improved_DR2$data)
     )
-}, mc.cores = num_cores)
+}, title = "fitted_model_11.logistic")
 ```
 
-```{r label = "Both Correct: Obtaining Parameters", cached = TRUE}
-params_11.linear = pbmclapply(1:n_rep, function(i) {
+```{r label = "Both Correct: Obtaining Parameters"}
+params_11.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = obtain_params_list(fitted_model_11.linear[[i]]$demystifing1, prop_model = TRUE, impute_model = TRUE),
         demystifing2 = obtain_params_list(fitted_model_11.linear[[i]]$demystifing2, prop_model = TRUE, impute_model = TRUE),
@@ -1758,15 +1836,17 @@ params_11.linear = pbmclapply(1:n_rep, function(i) {
         stable_eff = obtain_params_list(fitted_model_11.linear[[i]]$stable_eff, prop_model = TRUE, impute_model = TRUE),
         br = obtain_params_list(fitted_model_11.linear[[i]]$br, prop_model = TRUE, impute_model = TRUE)
     )
-}, mc.cores = num_cores)
+}, title = "params_11.linear")
 
-params_11.logistic = pbmclapply(1:n_rep, function(i) {
+params_11.logistic = pmclapply(1:n_rep, function(i) {
     list(
         improved_DR1 = obtain_params_list(fitted_model_11.logistic[[i]]$improved_DR1, prop_model = TRUE, impute_model = TRUE),
         improved_DR2 = obtain_params_list(fitted_model_11.logistic[[i]]$improved_DR2, prop_model = TRUE, impute_model = TRUE)
     )
-}, mc.cores = num_cores)
+}, title = "params_11.logistic")
+```
 
+```{r include = FALSE}
 save(data_11.linear, 
      data_11.logistic,
      fitted_model_11.linear,
@@ -1776,16 +1856,33 @@ save(data_11.linear,
      file = "data/simulation-v2/11.RData")
 ```
 
-```{r label = "Both Correct: Obtaining Results"}
-# obtain_results(params_11.linear$demystifing1, estimators.linear)
 
-# todo save in .Rdata
+```{r include = FALSE}
+load("data/simulation-v2/11.RData")
+```
+
+```{r label = "Both Correct: Obtaining Estimates"}
+estimates_11.linear.demystifing1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_results(params_11.linear[[i]]$demystifing1, Non_DR_Estimators.linear)),
+        unlist(obtain_results(params_11.linear[[i]]$demystifing1, DR_Estimators.linear))
+    )
+}, title = "estimates_11.linear.demystifing1")
 
 ```
 
 ```{r label = "Both Correct: Analyzing Results"}
+results_11.linear.demystifing1 = analyze_estimates(
+    estimates_11.linear.demystifing1,
+    estimates_true.linear$demystifing1,
+    "Demystifing 1")
+table_11.linear.demystifing1 = results_11.linear.demystifing1$table
+fig_11.linear.demystifing1 = results_11.linear.demystifing1$fig
 
+print(table_11.linear.demystifing1)
+print(fig_11.linear.demystifing1)
 ```
+
 
 ## Missing Model is Incorrect
 

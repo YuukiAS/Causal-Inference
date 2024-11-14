@@ -54,3 +54,5 @@ rsconnect/
 *.RData
 quarto-html
 *_files
+*.rmarkdown
+code
