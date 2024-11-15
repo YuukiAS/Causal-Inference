@@ -7,7 +7,7 @@ toc-title: "Table of Contents"
 
 # Set Up Environment
 
-```{r include = FALSE}
+```{r include = FALSE, message = NA}
 library(MASS)
 
 library(knitr)
@@ -15,7 +15,6 @@ library(knitrProgressBar)
 library(kableExtra)
 
 library(ggplot2)
-library(dplyr)
 library(purrr)
 library(tidyr)
 library(viridis)  # palette for boxplot
@@ -25,7 +24,10 @@ library(mcprogress)  # wrap mclapply with progress bar.
 
 set.seed(1234)
 options(digits = 6)
-options(mc.cores = detectCores() - 1)
+message("Number of cores: ", detectCores())
+# * Slurm will use more cores than assigned in Slurm, need to adjust accordingly
+message("mc.cores is set to ", max(1, as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores())) - 2))
+options(mc.cores = max(1, as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores())) - 2))
 ```
 
 ```{r include = FALSE}
@@ -33,13 +35,13 @@ setwd("/work/users/y/u/yuukias/Causal-Inference/src")
 ```
 
 ```{r label = "Constants"}
-nrep_large = 2000
+nrep_large = 5000
 nrep_normal = 500
 nrep_small = 50
 
-N_large = 100000
-N_normal = 20000
-N_small = 5000
+N_large = 5000
+N_normal = 500
+N_small = 50
 
 n_rep = nrep_normal  # modify for different number of replications
 N = N_normal  # modify for different size of data
@@ -114,6 +116,12 @@ Strat_Pi_matrix = function(y, D, prop, S = 5) {
     N = length(y)
     si = cut(prop, breaks = S, labels = 1:S)
     ci = sapply(1:S, function(s) si == s)
+    # * When sample size is small, smaller S may not have estimates, in this case we adjust by ci
+    while (0 %in% colSums(ci * D)) {
+        S = S - 1
+        si = cut(prop, breaks = S, labels = 1:S)
+        ci = sapply(1:S, function(s) si == s)
+    }
     strata = colSums(ci) / N * colSums(ci * D * y) / colSums(ci * D)
     return(sum(strata))
 }
@@ -1250,7 +1258,7 @@ Scenario 1 is the same as demystifing paper.
 ### Scenario 2
 
 Incorrect outcome model: $m_0(x)=1+x$
-Incorrect propensity model: $\pi_0(x)=expit(\varespilon \cdot x)$
+Incorrect propensity model: $\pi_0(x)=expit(\varepsilon \cdot x)$
 
 ```{r}
 #' Model mis-speification: Wrong form of model
@@ -1541,44 +1549,48 @@ obtain_params_list = function(fitted.model, prop_model, impute_model, prop.speci
   return(params)
 }
 
-#' Obtain results for one simulation, using a list of estimators
+#' Obtain estimates for one simulation, using a list of estimators
 #' @param params Parameters list for one simulation
 #' @param estimators List of estimators
-obtain_results = function(params, estimators) {
-    results = lapply(estimators, function(estimator) {
+obtain_estimates = function(params, estimators) {
+    estimates = lapply(estimators, function(estimator) {
         # avoid "unused argument" error
         arguments = names(formals(estimator))
         filtered_arguments = params[names(params) %in% arguments]
         do.call(estimator, filtered_arguments)
     })
-    names(results) = names(estimators)
-    return(results)
+    names(estimates) = names(estimators)
+    return(estimates)
 }
 
 #' Analyze the estimates for one scenario, return a table of summary statistics and a boxplot
-#' @param results List of estimates,each result is a vector, corresponding to estimators
+#' @param estimates List of estimates,each result is a vector, corresponding to estimators
 #' @param mean The true mean in the setting
-analyze_estimates = function(results, mean, caption = NULL) {
-    # seq_along(results[[1]]) give a sequence of 1 to length(results[[1]])
+analyze_estimates = function(estimates, mean, caption = NULL) {
+    # seq_along(estimates[[1]]) give a sequence of 1 to length(estimates[[1]])
     # .x gets the x-th element of the sequence
     # map_dbl(.x, .f) applies a function to each element of a list
-    names.estimators = names(results[[1]])
-    mean.estimators = map_dbl(seq_along(results[[1]]), ~ mean(map_dbl(results, .x)))
+    names.estimators = names(estimates[[1]])
+    mean.estimators = map_dbl(seq_along(estimates[[1]]), ~ mean(map_dbl(estimates, .x)))
     bias.estimators = mean.estimators - mean
-    var.estimators = map_dbl(seq_along(results[[1]]), ~ var(map_dbl(results, .x)))
+    # se.estimators = map_dbl(seq_along(estimates[[1]]), ~ sd(map_dbl(estimates, .x))) / sqrt(length(estimates))
+    # define Monte Carlo Standard Deviation(MCSD)
+    mcsd.estimators = map_dbl(seq_along(estimates[[1]]), ~ sd(map_dbl(estimates, .x)))
+    var.estimators = map_dbl(seq_along(estimates[[1]]), ~ var(map_dbl(estimates, .x)))
     rmse.estimators = sqrt(var.estimators + bias.estimators^2)
 
     df.estimators = data.frame(
-        Names=names.estimators,
+        Estimators=names.estimators,
         Bias=bias.estimators,
-        Variance=var.estimators,
+        MCSD=mcsd.estimators,
         RMSE=rmse.estimators
     )
 
-    table = kable(df.estimators, caption)
+    table = kable(df.estimators, caption = caption, digits = 3) %>%
+            row_spec(0, bold = TRUE) %>%
+            kable_styling(latex_options = "striped")
 
-    
-    df.results =  map_dfr(results, ~ {
+    df.results =  map_dfr(estimates, ~ {
         tibble(Value = .x, Estimator = names(.x))
     })
 
@@ -1758,25 +1770,24 @@ estimates_true.logistic = list(
 
 ```{r label = "True Mean: Visualization", output = "asis"}
 df_true.all = data.frame(
-    Mean= c(unlist(estimates_true.linear), unlist(estimates_true.logistic)),
-    Images = c("Demystifying 1", 
-                "Demystifying 2", 
-                "Framework 1", 
-                "Framework 2", 
-                "Framework 3", 
-                "Stable and Efficient", 
-                "Bias-Reduced", 
-                "Improved DR 1 (Demystifying 3)", 
-                "Improved DR 2 (Demystifying 4)")
+    Scenario = c("Demystifying 1", 
+            "Demystifying 2", 
+            "Framework 1", 
+            "Framework 2", 
+            "Framework 3", 
+            "Stable and Efficient", 
+            "Bias-Reduced", 
+            "Improved DR 1 (Demystifying 3)", 
+            "Improved DR 2 (Demystifying 4)"),
+    Mean= c(unlist(estimates_true.linear), unlist(estimates_true.logistic))
 )
-df_true.all$ImagePaths = paste0('<img src="./img/', df_true.all$Images, '.png" width="100" />')
+# df_true.all$Images = paste0('<img src="./img/', df_true.all$Images, '.png" width="100" />')  # HTML
+df_true.all$ImagePaths = paste0('\\includegraphics[width=0.6\\textwidth, height=0.1\\textheight]{./img/', df_true.all$Scenario, '.png}') # PDF
+colnames(df_true.all) = c("Scenario", "Mean", "Histogram of Propensity Scores")
 
-df_true_transposed.all <- data.frame(t(df_true.all[c("Mean", "ImagePaths")]))
-colnames(df_true_transposed.all) <- df_true.all$Images
-rownames(df_true_transposed.all) <- c("Mean", "Histogram of Propensity Scores")
-
-kable(df_true_transposed.all, escape = FALSE) %>%
-  kable_styling()
+kable(df_true.all, escape = FALSE, row.names = FALSE, digits = 3) %>%
+    row_spec(0, bold = TRUE) %>%
+    kable_styling(latex_options = "striped") # latex_options can be dropped for HTML
 ```
 
 
@@ -1846,41 +1857,46 @@ params_11.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "params_11.logistic")
 ```
 
-```{r include = FALSE}
-save(data_11.linear, 
-     data_11.logistic,
-     fitted_model_11.linear,
-     fitted_model_11.logistic,
-     params_11.linear,
+```{r include = FALSE, label = "Both Correct: Saving Data"}
+save(params_11.linear,
      params_11.logistic,
      file = "data/simulation-v2/11.RData")
 ```
 
 
-```{r include = FALSE}
+```{r include = FALSE, label = "Both Correct: Loading Data", eval = FALSE}
 load("data/simulation-v2/11.RData")
 ```
 
 ```{r label = "Both Correct: Obtaining Estimates"}
 estimates_11.linear.demystifing1 = pmclapply(1:n_rep, function(i) {
     c(
-        unlist(obtain_results(params_11.linear[[i]]$demystifing1, Non_DR_Estimators.linear)),
-        unlist(obtain_results(params_11.linear[[i]]$demystifing1, DR_Estimators.linear))
+        unlist(obtain_estimates(params_11.linear[[i]]$demystifing1, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_11.linear[[i]]$demystifing1, DR_Estimators.linear))
     )
 }, title = "estimates_11.linear.demystifing1")
-
 ```
 
-```{r label = "Both Correct: Analyzing Results"}
+```{r label = "Both Correct: Analyzing Estimates"}
 results_11.linear.demystifing1 = analyze_estimates(
     estimates_11.linear.demystifing1,
     estimates_true.linear$demystifing1,
     "Demystifing 1")
 table_11.linear.demystifing1 = results_11.linear.demystifing1$table
 fig_11.linear.demystifing1 = results_11.linear.demystifing1$fig
+```
 
+```{r output = "asis"}
 print(table_11.linear.demystifing1)
+```
+
+```{r fig.width=10, fig.height=6}
 print(fig_11.linear.demystifing1)
+```
+
+```{r include = FALSE}
+# Remove data from memory
+rm(data_11.linear, data_11.logistic, fitted_model_11.linear, fitted_model_11.logistic)
 ```
 
 
