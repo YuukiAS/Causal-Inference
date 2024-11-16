@@ -3,6 +3,14 @@ title: 'Double Robust version of ELW: Simulation-2'
 author: 'Mingcheng Hu'
 toc: true
 toc-title: "Table of Contents"
+format:
+    pdf:
+        keep-tex: true
+        include-in-header: 
+            text: |
+                \usepackage{fvextra}
+                \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+                \DefineVerbatimEnvironment{OutputCode}{Verbatim}{breaklines,commandchars=\\\{\}}
 ---
 
 # Set Up Environment
@@ -32,6 +40,7 @@ options(mc.cores = max(1, as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", unset = d
 
 ```{r include = FALSE}
 setwd("/work/users/y/u/yuukias/Causal-Inference/src")
+start_time = Sys.time()
 ```
 
 ```{r label = "Constants"}
@@ -39,14 +48,20 @@ nrep_large = 5000
 nrep_normal = 500
 nrep_small = 50
 
+N_true = 50000
 N_large = 5000
 N_normal = 500
 N_small = 50
 
-n_rep = 3  # modify for different number of replications
-N = N_normal  # modify for different size of data
+n_rep = nrep_normal  # modify for different number of replications
+# * Note: y_imputed will fail for logistic model if N is small
+N = N_large  # modify for different size of data
 ```
 
+```{r include = FALSE, message = NA}
+message("N is set to ", N)
+message("Number of replications is set to ", n_rep)
+```
 
 
 # Implementing Estimators
@@ -504,12 +519,22 @@ DR_BR = function(y, D, x, prop_model_formula, impute_model_formula, type) {
     # init.gamma = coef(glm(D ~ x, family = "binomial"))
     init.gamma = coef(glm(prop_model_formula_extended, family = "binomial", data = data))
     init.beta = coef(lm(impute_model_formula_extended, data = subset(data, D == 1)))
-    if (type == "linear") {
-        sol = nlm(min.Uint.linear, init.gamma) # nonlinear minimization
-    } else if (type == "logistic") {
-        sol = nlm(min.Uint.logistic, init.gamma)
-    } else {
-        stop("Invalid type")
+
+    sol = NULL
+    tryCatch({
+        if (type == "linear") {
+            sol = nlm(min.Uint.linear, init.gamma) # nonlinear minimization
+        } else if (type == "logistic") {
+            sol = nlm(min.Uint.logistic, init.gamma)
+        } else {
+            stop("Invalid type")
+        }
+    }, error = function(e) {
+        # * in a few cases nlm will return non-finite values
+        return(NULL)
+    })
+    if (is.null(sol)) {
+        return(NULL)
     }
     # define Parameters of missing model
     gamma.BR = sol$estimate
@@ -625,7 +650,7 @@ CBPS = function(y, D, x, prop_model_formula) {
     # Follow the code in https://github.com/kosukeimai/CBPS/blob/master/R/CBPSMain.R
     data = data.frame(y = y, D = D, x)
     CBPS.fit = CBPS::CBPS(prop_model_formula, data = data, ATT = 0)
-    return(mean(D*y/CBPS.fit$fitted.values))
+    return(sum(D * y / CBPS.fit$fitted.values) / sum(D / CBPS.fit$fitted.values))
 }
 
 # Ref Cao, Weihua, et al. “Improving Efficiency and Robustness of the Doubly Robust Estimator for a Population Mean with Incomplete Data.” Biometrika, vol. 96, no. 3, Sept. 2009, pp. 723–34. DOI.org (Crossref), https://doi.org/10.1093/biomet/asp033.
@@ -1035,7 +1060,7 @@ In this case we choose the homogeneous treatment effect $\Delta=3$. Note that as
 ```{r}
 alpha_A.gen4 = c(-0.5, 0.3, 0.4, 0.4, 0.4) # good overlap
 alpha_B.gen4 = c(-1, 0.6, 0.8, 0.8, 0.8) # moderate overlap
-alpha_C.gen4 = c(-1.5, 0.9, 1.2, 1, 2, 1.2) # poor overlap
+alpha_C.gen4 = c(-1.5, 0.9, 1.2, 1.2, 1.2) # poor overlap
 
 #' Model mis-speification: Ignore covariates (Set to first one)
 data.gen4 = function(N, alpha = alpha_C.gen4) {
@@ -1401,11 +1426,11 @@ Fitted.model8 = setRefClass("Fitted.model8",
         },
         get_y_imputed.correct = function() {
             impute_model = glm(get_impute_model_formula.correct(), family = binomial, data = subset(data, D == 1))
-            return(predict(impute_model, newdata = data))
+            return(predict(impute_model, newdata = data, type = "response"))
         },
         get_y_imputed.incorrect = function() {
             impute_model = glm(get_impute_model_formula.incorrect(), family = binomial, data = subset(data, D == 1))
-            return(predict(impute_model, newdata = data))
+            return(predict(impute_model, newdata = data, type = "response"))
         }
     )
 )
@@ -1486,11 +1511,11 @@ Fitted.model9 = setRefClass("Fitted.model9",
         },
         get_y_imputed.correct = function() {
             impute_model = glm(get_impute_model_formula.correct(), family = binomial, data = subset(data, D == 1))
-            return(predict(impute_model, newdata = data))
+            return(predict(impute_model, newdata = data, type = "response"))
         },
         get_y_imputed.incorrect = function() {
             impute_model = glm(get_impute_model_formula.incorrect(), family = binomial, data = subset(data, D == 1))
-            return(predict(impute_model, newdata = data))
+            return(predict(impute_model, newdata = data, type = "response"))
         }
     )
 )
@@ -1580,6 +1605,9 @@ obtain_estimates = function(params, estimators) {
 #' @param estimates List of estimates,each result is a vector, corresponding to estimators
 #' @param mean The true mean in the setting
 analyze_estimates = function(estimates, mean, caption = NULL) {
+    # remove NULL in estimates
+    estimates = estimates %>% compact()
+
     # seq_along(estimates[[1]]) give a sequence of 1 to length(estimates[[1]])
     # .x gets the x-th element of the sequence
     # map_dbl(.x, .f) applies a function to each element of a list
@@ -1607,8 +1635,11 @@ analyze_estimates = function(estimates, mean, caption = NULL) {
         tibble(Value = .x, Estimator = names(.x))
     })
 
+    sd = median(mcsd.estimators)  # for ylim
+
     fig = ggplot(df.results, aes(x = Estimator, y = Value, fill = Estimator)) +
         geom_boxplot(outlier.shape = 21, outlier.size = 2, outlier.color = "red", alpha = 0.8) +
+        geom_hline(yintercept = mean, color = "red", linetype = "dashed", size = 1) +
         theme_minimal(base_size = 14) +
         scale_fill_viridis(discrete = TRUE, option = "D") +
         labs(
@@ -1617,6 +1648,8 @@ analyze_estimates = function(estimates, mean, caption = NULL) {
             y = "Values",
             fill = "Estimator"
         ) +
+        # ylim(max(0, mean - 3 * sd), mean + 3 * sd) +
+        coord_cartesian(ylim = c(max(0, mean - 3 * sd), mean + 3 * sd)) +
         theme(
             plot.title = element_text(hjust = 0.5, face = "bold"),
             axis.text.x = element_text(angle = 45, hjust = 1),
@@ -1711,18 +1744,18 @@ DR_Estimators.logistic = list(
 ```{r label = "True Mean: Generating Data"}
 # define Generate data in the largest size to calculate the true population mean
 data_true.linear = list(
-    demystifing1 = data.gen1(N_large),  # linear imputation
-    demystifing2 = data.gen2(N_large),  # linear imputation
-    framework1 = data.gen3(N_large),  # linear imputation
-    framework2 = data.gen4(N_large),  # linear imputation
-    framework3 = data.gen5(N_large),  # linear imputation
-    stable_eff = data.gen6(N_large),  # linear Imputation
-    br = data.gen7(N_large)  # linear imputation
+    demystifing1 = data.gen1(N_true),  # linear imputation
+    demystifing2 = data.gen2(N_true),  # linear imputation
+    framework1 = data.gen3(N_true),  # linear imputation
+    framework2 = data.gen4(N_true),  # linear imputation
+    framework3 = data.gen5(N_true),  # linear imputation
+    stable_eff = data.gen6(N_true),  # linear Imputation
+    br = data.gen7(N_true)  # linear imputation
 )
 
 data_true.logistic = list(
-    improved_DR1 = data.gen8(N_large),  # logistic imputation
-    improved_DR2 = data.gen9(N_large)   # logistic imputation
+    improved_DR1 = data.gen8(N_true),  # logistic imputation
+    improved_DR2 = data.gen9(N_true)   # logistic imputation
 )
 ```
 
@@ -1870,17 +1903,6 @@ params_11.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "params_11.logistic")
 ```
 
-```{r include = FALSE, label = "Both Correct: Saving Data"}
-save(params_11.linear,
-     params_11.logistic,
-     file = "data/simulation-v2/11.RData")
-```
-
-
-```{r include = FALSE, label = "Both Correct: Loading Data", eval = FALSE}
-load("data/simulation-v2/11.RData")
-```
-
 ```{r label = "Both Correct: Obtaining Estimates"}
 estimates_11.linear.demystifing1 = pmclapply(1:n_rep, function(i) {
     c(
@@ -1928,8 +1950,7 @@ estimates_11.linear.stable_eff = pmclapply(1:n_rep, function(i) {
 estimates_11.linear.br = pmclapply(1:n_rep, function(i) {
     c(
         unlist(obtain_estimates(params_11.linear[[i]]$br, Non_DR_Estimators.linear)),
-        # Special case: Remove DR_BR for br scenario
-        unlist(obtain_estimates(params_11.linear[[i]]$br, DR_Estimators.linear[-7]))
+        unlist(obtain_estimates(params_11.linear[[i]]$br, DR_Estimators.linear))
     )
 }, title = "estimates_11.linear.br")
 
@@ -1946,6 +1967,26 @@ estimates_11.logistic.improved_DR2 = pmclapply(1:n_rep, function(i) {
         unlist(obtain_estimates(params_11.logistic[[i]]$improved_DR2, DR_Estimators.logistic))
     )
 }, title = "estimates_11.logistic.improved_DR2")
+```
+
+```{r include = FALSE, label = "Both Correct: Saving Data"}
+save(params_11.linear,
+     params_11.logistic,
+     estimates_11.linear.demystifing1,
+     estimates_11.linear.demystifing2,
+     estimates_11.linear.framework1,
+     estimates_11.linear.framework2,
+     estimates_11.linear.framework3,
+     estimates_11.linear.stable_eff,
+     estimates_11.linear.br,
+     estimates_11.logistic.improved_DR1,
+     estimates_11.logistic.improved_DR2,
+     file = "data/simulation-v2/11.RData")
+```
+
+
+```{r include = FALSE, label = "Both Correct: Loading Data", eval = FALSE}
+load("data/simulation-v2/11.RData")
 ```
 
 ```{r label = "Both Correct: Analyzing Estimates"}
@@ -2085,7 +2126,6 @@ print(table_11.logistic.improved_DR2)
 print(fig_11.logistic.improved_DR2)
 ```
 
-
 ```{r include = FALSE}
 # Remove data from memory
 rm(data_11.linear, data_11.logistic, fitted_model_11.linear, fitted_model_11.logistic)
@@ -2095,15 +2135,892 @@ rm(data_11.linear, data_11.logistic, fitted_model_11.linear, fitted_model_11.log
 ## Missing Model is Incorrect
 
 
+```{r label = "Missing Incorrect: Generating Data"}
+data_01.linear = pmclapply(1:n_rep, function(i) {
+    list(
+        demystifing1 = data.gen1(N),
+        demystifing2 = data.gen2(N),
+        framework1 = data.gen3(N),
+        framework2 = data.gen4(N),
+        framework3 = data.gen5(N),
+        stable_eff = data.gen6(N),
+        br = data.gen7(N)
+    )
+}, title = "data_01.linear")
+
+data_01.logistic = pmclapply(1:n_rep, function(i) {
+    list(
+        improved_DR1 = data.gen8(N),
+        improved_DR2 = data.gen9(N)
+    )
+}, title = "data_01.logistic")
+```
+
+```{r label = "Missing Incorrect: Fitting Model"}
+fitted_model_01.linear = pmclapply(1:n_rep, function(i) {
+    list(
+        demystifing1 = do.call(Fitted.model1$new, data_01.linear[[i]]$demystifing1$data),
+        demystifing2 = do.call(Fitted.model2$new, data_01.linear[[i]]$demystifing2$data),
+        framework1 = do.call(Fitted.model3$new, data_01.linear[[i]]$framework1$data),
+        framework2 = do.call(Fitted.model4$new, data_01.linear[[i]]$framework2$data),
+        framework3 = do.call(Fitted.model5$new, data_01.linear[[i]]$framework3$data),
+        stable_eff = do.call(Fitted.model6$new, data_01.linear[[i]]$stable_eff$data),
+        br = do.call(Fitted.model7$new, data_01.linear[[i]]$br$data)
+    )
+}, title = "fitted_model_01.linear")
+
+fitted_model_01.logistic = pmclapply(1:n_rep, function(i) {
+    list(
+        improved_DR1 = do.call(Fitted.model8$new, data_01.logistic[[i]]$improved_DR1$data),
+        improved_DR2 = do.call(Fitted.model9$new, data_01.logistic[[i]]$improved_DR2$data)
+    )
+}, title = "fitted_model_01.logistic")
+```
+
+```{r label = "Missing Incorrect: Obtaining Parameters"}
+params_01.linear = pmclapply(1:n_rep, function(i) {
+    list(
+        demystifing1 = obtain_params_list(fitted_model_01.linear[[i]]$demystifing1, prop_model = TRUE, impute_model = TRUE),
+        demystifing2 = obtain_params_list(fitted_model_01.linear[[i]]$demystifing2, prop_model = TRUE, impute_model = TRUE),
+        framework1 = obtain_params_list(fitted_model_01.linear[[i]]$framework1, prop_model = TRUE, impute_model = TRUE),
+        framework2 = obtain_params_list(fitted_model_01.linear[[i]]$framework2, prop_model = TRUE, impute_model = TRUE),
+        framework3 = obtain_params_list(fitted_model_01.linear[[i]]$framework3, prop_model = TRUE, impute_model = TRUE, prop.specify = TRUE, prop.correct = TRUE),
+        stable_eff = obtain_params_list(fitted_model_01.linear[[i]]$stable_eff, prop_model = TRUE, impute_model = TRUE),
+        br = obtain_params_list(fitted_model_01.linear[[i]]$br, prop_model = TRUE, impute_model = TRUE)
+    )
+}, title = "params_01.linear")
+
+params_01.logistic = pmclapply(1:n_rep, function(i) {
+    list(
+        improved_DR1 = obtain_params_list(fitted_model_01.logistic[[i]]$improved_DR1, prop_model = TRUE, impute_model = TRUE),
+        improved_DR2 = obtain_params_list(fitted_model_01.logistic[[i]]$improved_DR2, prop_model = TRUE, impute_model = TRUE)
+    )
+}, title = "params_01.logistic")
+```
+
+```{r label = "Missing Incorrect: Obtaining Estimates"}
+estimates_01.linear.demystifing1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_01.linear[[i]]$demystifing1, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_01.linear[[i]]$demystifing1, DR_Estimators.linear))
+    )
+}, title = "estimates_01.linear.demystifing1")
+
+estimates_01.linear.demystifing2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_01.linear[[i]]$demystifing2, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_01.linear[[i]]$demystifing2, DR_Estimators.linear))
+    )
+}, title = "estimates_01.linear.demystifing2")
+
+estimates_01.linear.framework1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_01.linear[[i]]$framework1, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_01.linear[[i]]$framework1, DR_Estimators.linear))
+    )
+}, title = "estimates_01.linear.framework1")
+
+estimates_01.linear.framework2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_01.linear[[i]]$framework2, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_01.linear[[i]]$framework2, DR_Estimators.linear))
+    )
+}, title = "estimates_01.linear.framework2")
+
+estimates_01.linear.framework3 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_01.linear[[i]]$framework3, Non_DR_Estimators.linear)),
+        # Special case: Remove Pi_Cov_2, DR_BR and CTD for framework3 scenario
+        unlist(obtain_estimates(params_01.linear[[i]]$framework3, DR_Estimators.linear[c(-5,-7,-12)]))
+    )
+}, title = "estimates_01.linear.framework3")
+
+estimates_01.linear.stable_eff = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_01.linear[[i]]$stable_eff, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_01.linear[[i]]$stable_eff, DR_Estimators.linear))
+    )
+}, title = "estimates_01.linear.stable_eff")
+
+estimates_01.linear.br = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_01.linear[[i]]$br, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_01.linear[[i]]$br, DR_Estimators.linear))
+    )
+}, title = "estimates_01.linear.br")
+
+estimates_01.logistic.improved_DR1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_01.logistic[[i]]$improved_DR1, Non_DR_Estimators.logistic)),
+        unlist(obtain_estimates(params_01.logistic[[i]]$improved_DR1, DR_Estimators.logistic))
+    )
+}, title = "estimates_01.logistic.improved_DR1")
+
+estimates_01.logistic.improved_DR2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_01.logistic[[i]]$improved_DR2, Non_DR_Estimators.logistic)),
+        unlist(obtain_estimates(params_01.logistic[[i]]$improved_DR2, DR_Estimators.logistic))
+    )
+}, title = "estimates_01.logistic.improved_DR2")
+```
+
+```{r include = FALSE, label = "Missing Incorrect: Saving Data"}
+save(params_01.linear,
+     params_01.logistic,
+     estimates_01.linear.demystifing1,
+     estimates_01.linear.demystifing2,
+     estimates_01.linear.framework1,
+     estimates_01.linear.framework2,
+     estimates_01.linear.framework3,
+     estimates_01.linear.stable_eff,
+     estimates_01.linear.br,
+     estimates_01.logistic.improved_DR1,
+     estimates_01.logistic.improved_DR2,
+     file = "data/simulation-v2/01.RData")
+```
+
+
+```{r include = FALSE, label = "Missing Incorrect: Loading Data", eval = FALSE}
+load("data/simulation-v2/01.RData")
+```
+
+```{r label = "Missing Incorrect: Analyzing Estimates"}
+results_01.linear.demystifing1 = analyze_estimates(
+    estimates_01.linear.demystifing1,
+    estimates_true.linear$demystifing1,
+    "Demystifing 1")
+table_01.linear.demystifing1 = results_01.linear.demystifing1$table
+fig_01.linear.demystifing1 = results_01.linear.demystifing1$fig
+
+results_01.linear.demystifing2 = analyze_estimates(
+    estimates_01.linear.demystifing2,
+    estimates_true.linear$demystifing2,
+    "Demystifing 2")
+table_01.linear.demystifing2 = results_01.linear.demystifing2$table
+fig_01.linear.demystifing2 = results_01.linear.demystifing2$fig
+
+results_01.linear.framework1 = analyze_estimates(
+    estimates_01.linear.framework1,
+    estimates_true.linear$framework1,
+    "Framework 1")
+table_01.linear.framework1 = results_01.linear.framework1$table
+fig_01.linear.framework1 = results_01.linear.framework1$fig
+
+results_01.linear.framework2 = analyze_estimates(
+    estimates_01.linear.framework2,
+    estimates_true.linear$framework2,
+    "Framework 2")
+table_01.linear.framework2 = results_01.linear.framework2$table
+fig_01.linear.framework2 = results_01.linear.framework2$fig
+
+results_01.linear.framework3 = analyze_estimates(
+    estimates_01.linear.framework3,
+    estimates_true.linear$framework3,
+    "Framework 3")
+table_01.linear.framework3 = results_01.linear.framework3$table
+fig_01.linear.framework3 = results_01.linear.framework3$fig
+
+results_01.linear.stable_eff = analyze_estimates(
+    estimates_01.linear.stable_eff,
+    estimates_true.linear$stable_eff,
+    "Stable and Efficient")
+table_01.linear.stable_eff = results_01.linear.stable_eff$table
+fig_01.linear.stable_eff = results_01.linear.stable_eff$fig
+
+results_01.linear.br = analyze_estimates(
+    estimates_01.linear.br,
+    estimates_true.linear$br,
+    "Bias-Reduced")
+table_01.linear.br = results_01.linear.br$table
+fig_01.linear.br = results_01.linear.br$fig
+
+results_01.logistic.improved_DR1 = analyze_estimates(
+    estimates_01.logistic.improved_DR1,
+    estimates_true.logistic$improved_DR1,
+    "Improved DR 1 (Demystifying 3)")
+table_01.logistic.improved_DR1 = results_01.logistic.improved_DR1$table
+fig_01.logistic.improved_DR1 = results_01.logistic.improved_DR1$fig
+
+results_01.logistic.improved_DR2 = analyze_estimates(
+    estimates_01.logistic.improved_DR2,
+    estimates_true.logistic$improved_DR2,
+    "Improved DR 2 (Demystifying 4)")
+table_01.logistic.improved_DR2 = results_01.logistic.improved_DR2$table
+fig_01.logistic.improved_DR2 = results_01.logistic.improved_DR2$fig
+```
+
+```{r output = "asis"}
+print(table_01.linear.demystifing1)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_01.linear.demystifing1)
+```
+
+```{r output = "asis"}
+print(table_01.linear.demystifing2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_01.linear.demystifing2)
+```
+
+```{r output = "asis"}
+print(table_01.linear.framework1)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_01.linear.framework1)
+```
+
+```{r output = "asis"}
+print(table_01.linear.framework2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_01.linear.framework2)
+```
+
+```{r output = "asis"}
+print(table_01.linear.framework3)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_01.linear.framework3)
+```
+
+```{r output = "asis"}
+print(table_01.linear.stable_eff)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_01.linear.stable_eff)
+```
+
+```{r output = "asis"}
+print(table_01.linear.br)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_01.linear.br)
+```
+
+```{r output = "asis"}
+print(table_01.logistic.improved_DR1)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_01.logistic.improved_DR1)
+```
+
+```{r output = "asis"}
+print(table_01.logistic.improved_DR2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_01.logistic.improved_DR2)
+```
+
+```{r include = FALSE}
+# Remove data from memory
+rm(data_01.linear, data_01.logistic, fitted_model_01.linear, fitted_model_01.logistic)
+```
+
 
 ## Imputation Model is Incorrect
 
+```{r label = "Imputation Incorrect: Generating Data"}
+# a list of n_rep elements, each element is also a list of lists (triple lists)
+data_10.linear = pmclapply(1:n_rep, function(i) {
+    list(
+        demystifing1 = data.gen1(N),
+        demystifing2 = data.gen2(N),
+        framework1 = data.gen3(N),
+        framework2 = data.gen4(N),
+        framework3 = data.gen5(N),
+        stable_eff = data.gen6(N),
+        br = data.gen7(N)
+    )
+}, title = "data_10.linear")
 
+data_10.logistic = pmclapply(1:n_rep, function(i) {
+    list(
+        improved_DR1 = data.gen8(N),
+        improved_DR2 = data.gen9(N)
+    )
+}, title = "data_10.logistic")
+```
+
+```{r label = "Imputation Incorrect: Fitting Model"}
+fitted_model_10.linear = pmclapply(1:n_rep, function(i) {
+    list(
+        demystifing1 = do.call(Fitted.model1$new, data_10.linear[[i]]$demystifing1$data),
+        demystifing2 = do.call(Fitted.model2$new, data_10.linear[[i]]$demystifing2$data),
+        framework1 = do.call(Fitted.model3$new, data_10.linear[[i]]$framework1$data),
+        framework2 = do.call(Fitted.model4$new, data_10.linear[[i]]$framework2$data),
+        framework3 = do.call(Fitted.model5$new, data_10.linear[[i]]$framework3$data),
+        stable_eff = do.call(Fitted.model6$new, data_10.linear[[i]]$stable_eff$data),
+        br = do.call(Fitted.model7$new, data_10.linear[[i]]$br$data)
+    )
+}, title = "fitted_model_10.linear")
+
+fitted_model_10.logistic = pmclapply(1:n_rep, function(i) {
+    list(
+        improved_DR1 = do.call(Fitted.model8$new, data_10.logistic[[i]]$improved_DR1$data),
+        improved_DR2 = do.call(Fitted.model9$new, data_10.logistic[[i]]$improved_DR2$data)
+    )
+}, title = "fitted_model_10.logistic")
+```
+
+```{r label = "Imputation Incorrect: Obtaining Parameters"}
+params_10.linear = pmclapply(1:n_rep, function(i) {
+    list(
+        demystifing1 = obtain_params_list(fitted_model_10.linear[[i]]$demystifing1, prop_model = TRUE, impute_model = TRUE),
+        demystifing2 = obtain_params_list(fitted_model_10.linear[[i]]$demystifing2, prop_model = TRUE, impute_model = TRUE),
+        framework1 = obtain_params_list(fitted_model_10.linear[[i]]$framework1, prop_model = TRUE, impute_model = TRUE),
+        framework2 = obtain_params_list(fitted_model_10.linear[[i]]$framework2, prop_model = TRUE, impute_model = TRUE),
+        framework3 = obtain_params_list(fitted_model_10.linear[[i]]$framework3, prop_model = TRUE, impute_model = TRUE, prop.specify = TRUE, prop.correct = TRUE),
+        stable_eff = obtain_params_list(fitted_model_10.linear[[i]]$stable_eff, prop_model = TRUE, impute_model = TRUE),
+        br = obtain_params_list(fitted_model_10.linear[[i]]$br, prop_model = TRUE, impute_model = TRUE)
+    )
+}, title = "params_10.linear")
+
+params_10.logistic = pmclapply(1:n_rep, function(i) {
+    list(
+        improved_DR1 = obtain_params_list(fitted_model_10.logistic[[i]]$improved_DR1, prop_model = TRUE, impute_model = TRUE),
+        improved_DR2 = obtain_params_list(fitted_model_10.logistic[[i]]$improved_DR2, prop_model = TRUE, impute_model = TRUE)
+    )
+}, title = "params_10.logistic")
+```
+
+```{r label = "Imputation Incorrect: Obtaining Estimates"}
+estimates_10.linear.demystifing1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_10.linear[[i]]$demystifing1, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_10.linear[[i]]$demystifing1, DR_Estimators.linear))
+    )
+}, title = "estimates_10.linear.demystifing1")
+
+estimates_10.linear.demystifing2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_10.linear[[i]]$demystifing2, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_10.linear[[i]]$demystifing2, DR_Estimators.linear))
+    )
+}, title = "estimates_10.linear.demystifing2")
+
+estimates_10.linear.framework1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_10.linear[[i]]$framework1, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_10.linear[[i]]$framework1, DR_Estimators.linear))
+    )
+}, title = "estimates_10.linear.framework1")
+
+estimates_10.linear.framework2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_10.linear[[i]]$framework2, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_10.linear[[i]]$framework2, DR_Estimators.linear))
+    )
+}, title = "estimates_10.linear.framework2")
+
+estimates_10.linear.framework3 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_10.linear[[i]]$framework3, Non_DR_Estimators.linear)),
+        # Special case: Remove Pi_Cov_2, DR_BR and CTD for framework3 scenario
+        unlist(obtain_estimates(params_10.linear[[i]]$framework3, DR_Estimators.linear[c(-5,-7,-12)]))
+    )
+}, title = "estimates_10.linear.framework3")
+
+estimates_10.linear.stable_eff = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_10.linear[[i]]$stable_eff, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_10.linear[[i]]$stable_eff, DR_Estimators.linear))
+    )
+}, title = "estimates_10.linear.stable_eff")
+
+estimates_10.linear.br = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_10.linear[[i]]$br, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_10.linear[[i]]$br, DR_Estimators.linear))
+    )
+}, title = "estimates_10.linear.br")
+
+estimates_10.logistic.improved_DR1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_10.logistic[[i]]$improved_DR1, Non_DR_Estimators.logistic)),
+        unlist(obtain_estimates(params_10.logistic[[i]]$improved_DR1, DR_Estimators.logistic))
+    )
+}, title = "estimates_10.logistic.improved_DR1")
+
+estimates_10.logistic.improved_DR2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_10.logistic[[i]]$improved_DR2, Non_DR_Estimators.logistic)),
+        unlist(obtain_estimates(params_10.logistic[[i]]$improved_DR2, DR_Estimators.logistic))
+    )
+}, title = "estimates_10.logistic.improved_DR2")
+```
+
+```{r include = FALSE, label = "Imputation Incorrect: Saving Data"}
+save(params_10.linear,
+     params_10.logistic,
+     estimates_10.linear.demystifing1,
+     estimates_10.linear.demystifing2,
+     estimates_10.linear.framework1,
+     estimates_10.linear.framework2,
+     estimates_10.linear.framework3,
+     estimates_10.linear.stable_eff,
+     estimates_10.linear.br,
+     estimates_10.logistic.improved_DR1,
+     estimates_10.logistic.improved_DR2,
+     file = "data/simulation-v2/10.RData")
+```
+
+
+```{r include = FALSE, label = "Imputation Incorrect: Loading Data", eval = FALSE}
+load("data/simulation-v2/10.RData")
+```
+
+```{r label = "Imputation Incorrect: Analyzing Estimates"}
+results_10.linear.demystifing1 = analyze_estimates(
+    estimates_10.linear.demystifing1,
+    estimates_true.linear$demystifing1,
+    "Demystifing 1")
+table_10.linear.demystifing1 = results_10.linear.demystifing1$table
+fig_10.linear.demystifing1 = results_10.linear.demystifing1$fig
+
+results_10.linear.demystifing2 = analyze_estimates(
+    estimates_10.linear.demystifing2,
+    estimates_true.linear$demystifing2,
+    "Demystifing 2")
+table_10.linear.demystifing2 = results_10.linear.demystifing2$table
+fig_10.linear.demystifing2 = results_10.linear.demystifing2$fig
+
+results_10.linear.framework1 = analyze_estimates(
+    estimates_10.linear.framework1,
+    estimates_true.linear$framework1,
+    "Framework 1")
+table_10.linear.framework1 = results_10.linear.framework1$table
+fig_10.linear.framework1 = results_10.linear.framework1$fig
+
+results_10.linear.framework2 = analyze_estimates(
+    estimates_10.linear.framework2,
+    estimates_true.linear$framework2,
+    "Framework 2")
+table_10.linear.framework2 = results_10.linear.framework2$table
+fig_10.linear.framework2 = results_10.linear.framework2$fig
+
+results_10.linear.framework3 = analyze_estimates(
+    estimates_10.linear.framework3,
+    estimates_true.linear$framework3,
+    "Framework 3")
+table_10.linear.framework3 = results_10.linear.framework3$table
+fig_10.linear.framework3 = results_10.linear.framework3$fig
+
+results_10.linear.stable_eff = analyze_estimates(
+    estimates_10.linear.stable_eff,
+    estimates_true.linear$stable_eff,
+    "Stable and Efficient")
+table_10.linear.stable_eff = results_10.linear.stable_eff$table
+fig_10.linear.stable_eff = results_10.linear.stable_eff$fig
+
+results_10.linear.br = analyze_estimates(
+    estimates_10.linear.br,
+    estimates_true.linear$br,
+    "Bias-Reduced")
+table_10.linear.br = results_10.linear.br$table
+fig_10.linear.br = results_10.linear.br$fig
+
+results_10.logistic.improved_DR1 = analyze_estimates(
+    estimates_10.logistic.improved_DR1,
+    estimates_true.logistic$improved_DR1,
+    "Improved DR 1 (Demystifying 3)")
+table_10.logistic.improved_DR1 = results_10.logistic.improved_DR1$table
+fig_10.logistic.improved_DR1 = results_10.logistic.improved_DR1$fig
+
+results_10.logistic.improved_DR2 = analyze_estimates(
+    estimates_10.logistic.improved_DR2,
+    estimates_true.logistic$improved_DR2,
+    "Improved DR 2 (Demystifying 4)")
+table_10.logistic.improved_DR2 = results_10.logistic.improved_DR2$table
+fig_10.logistic.improved_DR2 = results_10.logistic.improved_DR2$fig
+```
+
+```{r output = "asis"}
+print(table_10.linear.demystifing1)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_10.linear.demystifing1)
+```
+
+```{r output = "asis"}
+print(table_10.linear.demystifing2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_10.linear.demystifing2)
+```
+
+```{r output = "asis"}
+print(table_10.linear.framework1)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_10.linear.framework1)
+```
+
+```{r output = "asis"}
+print(table_10.linear.framework2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_10.linear.framework2)
+```
+
+```{r output = "asis"}
+print(table_10.linear.framework3)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_10.linear.framework3)
+```
+
+```{r output = "asis"}
+print(table_10.linear.stable_eff)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_10.linear.stable_eff)
+```
+
+```{r output = "asis"}
+print(table_10.linear.br)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_10.linear.br)
+```
+
+```{r output = "asis"}
+print(table_10.logistic.improved_DR1)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_10.logistic.improved_DR1)
+```
+
+```{r output = "asis"}
+print(table_10.logistic.improved_DR2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_10.logistic.improved_DR2)
+```
+
+```{r include = FALSE}
+# Remove data from memory
+rm(data_10.linear, data_10.logistic, fitted_model_10.linear, fitted_model_10.logistic)
+```
 
 ## Both Models are incorrect
+```{r label = "Both Incorrect: Generating Data"}
+# a list of n_rep elements, each element is also a list of lists (triple lists)
+data_00.linear = pmclapply(1:n_rep, function(i) {
+    list(
+        demystifing1 = data.gen1(N),
+        demystifing2 = data.gen2(N),
+        framework1 = data.gen3(N),
+        framework2 = data.gen4(N),
+        framework3 = data.gen5(N),
+        stable_eff = data.gen6(N),
+        br = data.gen7(N)
+    )
+}, title = "data_00.linear")
+
+data_00.logistic = pmclapply(1:n_rep, function(i) {
+    list(
+        improved_DR1 = data.gen8(N),
+        improved_DR2 = data.gen9(N)
+    )
+}, title = "data_00.logistic")
+```
+
+```{r label = "Both Incorrect: Fitting Model"}
+fitted_model_00.linear = pmclapply(1:n_rep, function(i) {
+    list(
+        demystifing1 = do.call(Fitted.model1$new, data_00.linear[[i]]$demystifing1$data),
+        demystifing2 = do.call(Fitted.model2$new, data_00.linear[[i]]$demystifing2$data),
+        framework1 = do.call(Fitted.model3$new, data_00.linear[[i]]$framework1$data),
+        framework2 = do.call(Fitted.model4$new, data_00.linear[[i]]$framework2$data),
+        framework3 = do.call(Fitted.model5$new, data_00.linear[[i]]$framework3$data),
+        stable_eff = do.call(Fitted.model6$new, data_00.linear[[i]]$stable_eff$data),
+        br = do.call(Fitted.model7$new, data_00.linear[[i]]$br$data)
+    )
+}, title = "fitted_model_00.linear")
+
+fitted_model_00.logistic = pmclapply(1:n_rep, function(i) {
+    list(
+        improved_DR1 = do.call(Fitted.model8$new, data_00.logistic[[i]]$improved_DR1$data),
+        improved_DR2 = do.call(Fitted.model9$new, data_00.logistic[[i]]$improved_DR2$data)
+    )
+}, title = "fitted_model_00.logistic")
+```
+
+```{r label = "Both Incorrect: Obtaining Parameters"}
+params_00.linear = pmclapply(1:n_rep, function(i) {
+    list(
+        demystifing1 = obtain_params_list(fitted_model_00.linear[[i]]$demystifing1, prop_model = TRUE, impute_model = TRUE),
+        demystifing2 = obtain_params_list(fitted_model_00.linear[[i]]$demystifing2, prop_model = TRUE, impute_model = TRUE),
+        framework1 = obtain_params_list(fitted_model_00.linear[[i]]$framework1, prop_model = TRUE, impute_model = TRUE),
+        framework2 = obtain_params_list(fitted_model_00.linear[[i]]$framework2, prop_model = TRUE, impute_model = TRUE),
+        framework3 = obtain_params_list(fitted_model_00.linear[[i]]$framework3, prop_model = TRUE, impute_model = TRUE, prop.specify = TRUE, prop.correct = TRUE),
+        stable_eff = obtain_params_list(fitted_model_00.linear[[i]]$stable_eff, prop_model = TRUE, impute_model = TRUE),
+        br = obtain_params_list(fitted_model_00.linear[[i]]$br, prop_model = TRUE, impute_model = TRUE)
+    )
+}, title = "params_00.linear")
+
+params_00.logistic = pmclapply(1:n_rep, function(i) {
+    list(
+        improved_DR1 = obtain_params_list(fitted_model_00.logistic[[i]]$improved_DR1, prop_model = TRUE, impute_model = TRUE),
+        improved_DR2 = obtain_params_list(fitted_model_00.logistic[[i]]$improved_DR2, prop_model = TRUE, impute_model = TRUE)
+    )
+}, title = "params_00.logistic")
+```
+
+```{r label = "Both Incorrect: Obtaining Estimates"}
+estimates_00.linear.demystifing1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_00.linear[[i]]$demystifing1, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_00.linear[[i]]$demystifing1, DR_Estimators.linear))
+    )
+}, title = "estimates_00.linear.demystifing1")
+
+estimates_00.linear.demystifing2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_00.linear[[i]]$demystifing2, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_00.linear[[i]]$demystifing2, DR_Estimators.linear))
+    )
+}, title = "estimates_00.linear.demystifing2")
+
+estimates_00.linear.framework1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_00.linear[[i]]$framework1, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_00.linear[[i]]$framework1, DR_Estimators.linear))
+    )
+}, title = "estimates_00.linear.framework1")
+
+estimates_00.linear.framework2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_00.linear[[i]]$framework2, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_00.linear[[i]]$framework2, DR_Estimators.linear))
+    )
+}, title = "estimates_00.linear.framework2")
+
+estimates_00.linear.framework3 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_00.linear[[i]]$framework3, Non_DR_Estimators.linear)),
+        # Special case: Remove Pi_Cov_2, DR_BR and CTD for framework3 scenario
+        unlist(obtain_estimates(params_00.linear[[i]]$framework3, DR_Estimators.linear[c(-5,-7,-12)]))
+    )
+}, title = "estimates_00.linear.framework3")
+
+estimates_00.linear.stable_eff = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_00.linear[[i]]$stable_eff, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_00.linear[[i]]$stable_eff, DR_Estimators.linear))
+    )
+}, title = "estimates_00.linear.stable_eff")
+
+estimates_00.linear.br = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_00.linear[[i]]$br, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_00.linear[[i]]$br, DR_Estimators.linear))
+    )
+}, title = "estimates_00.linear.br")
+
+estimates_00.logistic.improved_DR1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_00.logistic[[i]]$improved_DR1, Non_DR_Estimators.logistic)),
+        unlist(obtain_estimates(params_00.logistic[[i]]$improved_DR1, DR_Estimators.logistic))
+    )
+}, title = "estimates_00.logistic.improved_DR1")
+
+estimates_00.logistic.improved_DR2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_00.logistic[[i]]$improved_DR2, Non_DR_Estimators.logistic)),
+        unlist(obtain_estimates(params_00.logistic[[i]]$improved_DR2, DR_Estimators.logistic))
+    )
+}, title = "estimates_00.logistic.improved_DR2")
+```
+
+```{r include = FALSE, label = "Both Incorrect: Saving Data"}
+save(params_00.linear,
+     params_00.logistic,
+     estimates_00.linear.demystifing1,
+     estimates_00.linear.demystifing2,
+     estimates_00.linear.framework1,
+     estimates_00.linear.framework2,
+     estimates_00.linear.framework3,
+     estimates_00.linear.stable_eff,
+     estimates_00.linear.br,
+     estimates_00.logistic.improved_DR1,
+     estimates_00.logistic.improved_DR2,
+     file = "data/simulation-v2/00.RData")
+```
 
 
-TODO: Make a nice plot comparing all parameters!
+```{r include = FALSE, label = "Both Incorrect: Loading Data", eval = FALSE}
+load("data/simulation-v2/00.RData")
+```
+
+```{r label = "Both Incorrect: Analyzing Estimates"}
+results_00.linear.demystifing1 = analyze_estimates(
+    estimates_00.linear.demystifing1,
+    estimates_true.linear$demystifing1,
+    "Demystifing 1")
+table_00.linear.demystifing1 = results_00.linear.demystifing1$table
+fig_00.linear.demystifing1 = results_00.linear.demystifing1$fig
+
+results_00.linear.demystifing2 = analyze_estimates(
+    estimates_00.linear.demystifing2,
+    estimates_true.linear$demystifing2,
+    "Demystifing 2")
+table_00.linear.demystifing2 = results_00.linear.demystifing2$table
+fig_00.linear.demystifing2 = results_00.linear.demystifing2$fig
+
+results_00.linear.framework1 = analyze_estimates(
+    estimates_00.linear.framework1,
+    estimates_true.linear$framework1,
+    "Framework 1")
+table_00.linear.framework1 = results_00.linear.framework1$table
+fig_00.linear.framework1 = results_00.linear.framework1$fig
+
+results_00.linear.framework2 = analyze_estimates(
+    estimates_00.linear.framework2,
+    estimates_true.linear$framework2,
+    "Framework 2")
+table_00.linear.framework2 = results_00.linear.framework2$table
+fig_00.linear.framework2 = results_00.linear.framework2$fig
+
+results_00.linear.framework3 = analyze_estimates(
+    estimates_00.linear.framework3,
+    estimates_true.linear$framework3,
+    "Framework 3")
+table_00.linear.framework3 = results_00.linear.framework3$table
+fig_00.linear.framework3 = results_00.linear.framework3$fig
+
+results_00.linear.stable_eff = analyze_estimates(
+    estimates_00.linear.stable_eff,
+    estimates_true.linear$stable_eff,
+    "Stable and Efficient")
+table_00.linear.stable_eff = results_00.linear.stable_eff$table
+fig_00.linear.stable_eff = results_00.linear.stable_eff$fig
+
+results_00.linear.br = analyze_estimates(
+    estimates_00.linear.br,
+    estimates_true.linear$br,
+    "Bias-Reduced")
+table_00.linear.br = results_00.linear.br$table
+fig_00.linear.br = results_00.linear.br$fig
+
+results_00.logistic.improved_DR1 = analyze_estimates(
+    estimates_00.logistic.improved_DR1,
+    estimates_true.logistic$improved_DR1,
+    "Improved DR 1 (Demystifying 3)")
+table_00.logistic.improved_DR1 = results_00.logistic.improved_DR1$table
+fig_00.logistic.improved_DR1 = results_00.logistic.improved_DR1$fig
+
+results_00.logistic.improved_DR2 = analyze_estimates(
+    estimates_00.logistic.improved_DR2,
+    estimates_true.logistic$improved_DR2,
+    "Improved DR 2 (Demystifying 4)")
+table_00.logistic.improved_DR2 = results_00.logistic.improved_DR2$table
+fig_00.logistic.improved_DR2 = results_00.logistic.improved_DR2$fig
+```
+
+```{r output = "asis"}
+print(table_00.linear.demystifing1)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_00.linear.demystifing1)
+```
+
+```{r output = "asis"}
+print(table_00.linear.demystifing2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_00.linear.demystifing2)
+```
+
+```{r output = "asis"}
+print(table_00.linear.framework1)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_00.linear.framework1)
+```
+
+```{r output = "asis"}
+print(table_00.linear.framework2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_00.linear.framework2)
+```
+
+```{r output = "asis"}
+print(table_00.linear.framework3)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_00.linear.framework3)
+```
+
+```{r output = "asis"}
+print(table_00.linear.stable_eff)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_00.linear.stable_eff)
+```
+
+```{r output = "asis"}
+print(table_00.linear.br)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_00.linear.br)
+```
+
+```{r output = "asis"}
+print(table_00.logistic.improved_DR1)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_00.logistic.improved_DR1)
+```
+
+```{r output = "asis"}
+print(table_00.logistic.improved_DR2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_00.logistic.improved_DR2)
+```
+
+```{r include = FALSE}
+# Remove data from memory
+rm(data_00.linear, data_00.logistic, fitted_model_00.linear, fitted_model_00.logistic)
+```
+
+
+```{r include = FALSE, message = NA}
+end_time = Sys.time()
+execution_seconds <- round(as.numeric(difftime(end_time, start_time, units = "secs")), 1)
+execution_minutes <- round(as.numeric(difftime(end_time, start_time, units = "mins")), 2)
+message("Execution time: ", execution_seconds, " seconds (", execution_minutes, " minutes)")
+```
 
 
 # Questions

@@ -56,3 +56,4 @@ quarto-html
 *_files
 *.rmarkdown
 code
+img
