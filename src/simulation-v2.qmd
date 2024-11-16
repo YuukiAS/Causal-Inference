@@ -43,7 +43,7 @@ N_large = 5000
 N_normal = 500
 N_small = 50
 
-n_rep = nrep_normal  # modify for different number of replications
+n_rep = 3  # modify for different number of replications
 N = N_normal  # modify for different size of data
 ```
 
@@ -130,8 +130,8 @@ Strat_Pi_matrix = function(y, D, prop, S = 5) {
 # * See comment for demystifing paper why it works well
 #' Missing model: Any
 #' Imputation model: Linear
-OLS = function(y, D, x, impute_model_formula) {
-    data = data.frame(y = y, D = D, x)
+OLS = function(y, D, x, prop, impute_model_formula) {
+    data = data.frame(y = y, D = D, x, prop = prop)
     impute_model = lm(impute_model_formula, data = subset(data, D == 1))
     return(mean(predict(impute_model, newdata = data)))
 }
@@ -421,7 +421,7 @@ library(tmle) # Tested on version 1.3.0-1, not working on latest version
 # Ref Page 17 (Mis-specified imputation model)
 #' Missing model: Any
 #' Imputation model: Any
-TMLE = function(y, D, x, prop_model_formula, impute_model_formula) {
+TMLE = function(y, D, x, prop, prop_model_formula, impute_model_formula) {
     N = length(y)
     y[D == 0] = NA
     # Response variables must be Y and Delta
@@ -431,6 +431,17 @@ TMLE = function(y, D, x, prop_model_formula, impute_model_formula) {
     impute_model_formula_renamed = as.formula(
         gsub("y", "Y", deparse(impute_model_formula))
     )
+
+    # Special case for framework3, where imputation model uses propensity scores
+    if ("prop" %in% all.vars(impute_model_formula_renamed)) {
+        x$prop1 = prop
+        impute_model_formula_renamed = update(impute_model_formula_renamed, . ~ . - prop + prop1)
+    }
+    if (grepl("I\\(prop\\^2\\)", deparse(impute_model_formula_renamed))) {
+        x$prop2 = prop^2
+        impute_model_formula_renamed = update(impute_model_formula_renamed, . ~ . - I(prop^2) + prop2)
+    }
+
     result.EY1 = tmle(y,
         A = rep(1, N), x,
         Qform = impute_model_formula_renamed, 
@@ -463,7 +474,7 @@ DR_BR = function(y, D, x, prop_model_formula, impute_model_formula, type) {
     # * Make sure two models have the same set of covariates
     prop_model_vars = all.vars(prop_model_formula)[-1]
     impute_model_vars = all.vars(impute_model_formula)[-1]
-    all_vars <- unique(c(prop_model_vars, impute_model_vars))
+    all_vars = unique(c(prop_model_vars, impute_model_vars))
 
     prop_model_formula_extended <- update(prop_model_formula, paste(". ~", paste(all_vars, collapse = " + ")))
     impute_model_formula_extended <- update(impute_model_formula, paste(". ~", paste(all_vars, collapse = " + ")))
@@ -481,7 +492,7 @@ DR_BR = function(y, D, x, prop_model_formula, impute_model_formula, type) {
 
     # Logistic conditional mean model
     min.Uint.logistic = function(gamma) {
-        -mean(((-R * exp(-gamma %*% t(xx))) + (-(1 - D) * (gamma %*% t(xx)))) *
+        -mean(((-D * exp(-gamma %*% t(xx))) + (-(1 - D) * (gamma %*% t(xx)))) *
             as.vector(expit(init.beta %*% t(xx)) * (1 - expit(init.beta %*% t(xx)))))
     }
 
@@ -491,7 +502,8 @@ DR_BR = function(y, D, x, prop_model_formula, impute_model_formula, type) {
     }
 
     # init.gamma = coef(glm(D ~ x, family = "binomial"))
-    init.gamma = coef(glm(prop_model_formula, family = "binomial", data = data))
+    init.gamma = coef(glm(prop_model_formula_extended, family = "binomial", data = data))
+    init.beta = coef(lm(impute_model_formula_extended, data = subset(data, D == 1)))
     if (type == "linear") {
         sol = nlm(min.Uint.linear, init.gamma) # nonlinear minimization
     } else if (type == "logistic") {
@@ -574,9 +586,9 @@ ELW_DR = function(y, D, prop, y_imputed, eps = sqrt(.Machine$double.eps)) { # ep
 # Ref IPW DR Estimator: mu_DR(pi_EXT, m_REG)
 #' Missing model: Any
 #' Imputation model: Linear
-DR_Bounded_IPW = function(y, D, x, prop_model_formula, impute_model_formula) {
-    data = data.frame(y = y, D = D, x)
-    mu_OLS = OLS(y, D, x, impute_model_formula)
+DR_Bounded_IPW = function(y, D, x, prop, prop_model_formula, impute_model_formula) {
+    data = data.frame(y = y, D = D, prop=prop, x)
+    mu_OLS = OLS(y, D, x, prop, impute_model_formula)
     y_imputed = predict(lm(impute_model_formula, data = subset(data, D == 1)), newdata = data)
     h = y_imputed - mu_OLS  # default choice in paper for extending missing model
     # prop_model_formula_extended = paste(prop_model_formula, "+ h")
@@ -623,6 +635,7 @@ CBPS = function(y, D, x, prop_model_formula) {
 CTD = function(y, D, x, prop_model_formula, impute_model_formula) {
     data = data.frame(y = y, D = D, x)  # Don't put x=x to keep separate columns
     prop = glm(prop_model_formula, family = binomial, data=data)$fitted.values
+    data = data.frame(y = y, D = D, x, prop = prop)
     impute_model = lm(impute_model_formula, data = subset(data, D == 1))
     y_imputed = predict(impute_model, newdata = data)
 
@@ -1681,13 +1694,13 @@ DR_Estimators.linear = list(
 
 #' Imputation model: Logistic
 DR_Estimators.logistic = list(
-    AIPW,
-    AIPW_Stablized,
-    TMLE,
+    AIPW=AIPW,
+    AIPW_Stablized=AIPW_Stablized,
+    TMLE=TMLE,
     DR_BR = function(y, D, x, prop_model_formula, impute_model_formula) DR_BR(y, D, x, prop_model_formula, impute_model_formula, type="logistic"),
-    ELW_DR,
-    DR_Bounded_IPW,
-    CBPS
+    ELW_DR=ELW_DR,
+    DR_Bounded_IPW=DR_Bounded_IPW,
+    CBPS=CBPS
     # ZZ_13 = function(y, D, prop, y_imputed) ZZ(y, D, prop, y_imputed, hn_power=-1/3),
     # ZZ_15 = function(y, D, prop, y_imputed) ZZ(y, D, prop, y_imputed, hn_power=-1/5)
 )
@@ -1875,6 +1888,64 @@ estimates_11.linear.demystifing1 = pmclapply(1:n_rep, function(i) {
         unlist(obtain_estimates(params_11.linear[[i]]$demystifing1, DR_Estimators.linear))
     )
 }, title = "estimates_11.linear.demystifing1")
+
+estimates_11.linear.demystifing2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_11.linear[[i]]$demystifing2, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_11.linear[[i]]$demystifing2, DR_Estimators.linear))
+    )
+}, title = "estimates_11.linear.demystifing2")
+
+estimates_11.linear.framework1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_11.linear[[i]]$framework1, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_11.linear[[i]]$framework1, DR_Estimators.linear))
+    )
+}, title = "estimates_11.linear.framework1")
+
+estimates_11.linear.framework2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_11.linear[[i]]$framework2, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_11.linear[[i]]$framework2, DR_Estimators.linear))
+    )
+}, title = "estimates_11.linear.framework2")
+
+estimates_11.linear.framework3 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_11.linear[[i]]$framework3, Non_DR_Estimators.linear)),
+        # Special case: Remove Pi_Cov_2, DR_BR and CTD for framework3 scenario
+        unlist(obtain_estimates(params_11.linear[[i]]$framework3, DR_Estimators.linear[c(-5,-7,-12)]))
+    )
+}, title = "estimates_11.linear.framework3")
+
+estimates_11.linear.stable_eff = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_11.linear[[i]]$stable_eff, Non_DR_Estimators.linear)),
+        unlist(obtain_estimates(params_11.linear[[i]]$stable_eff, DR_Estimators.linear))
+    )
+}, title = "estimates_11.linear.stable_eff")
+
+estimates_11.linear.br = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_11.linear[[i]]$br, Non_DR_Estimators.linear)),
+        # Special case: Remove DR_BR for br scenario
+        unlist(obtain_estimates(params_11.linear[[i]]$br, DR_Estimators.linear[-7]))
+    )
+}, title = "estimates_11.linear.br")
+
+estimates_11.logistic.improved_DR1 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_11.logistic[[i]]$improved_DR1, Non_DR_Estimators.logistic)),
+        unlist(obtain_estimates(params_11.logistic[[i]]$improved_DR1, DR_Estimators.logistic))
+    )
+}, title = "estimates_11.logistic.improved_DR1")
+
+estimates_11.logistic.improved_DR2 = pmclapply(1:n_rep, function(i) {
+    c(
+        unlist(obtain_estimates(params_11.logistic[[i]]$improved_DR2, Non_DR_Estimators.logistic)),
+        unlist(obtain_estimates(params_11.logistic[[i]]$improved_DR2, DR_Estimators.logistic))
+    )
+}, title = "estimates_11.logistic.improved_DR2")
 ```
 
 ```{r label = "Both Correct: Analyzing Estimates"}
@@ -1884,6 +1955,62 @@ results_11.linear.demystifing1 = analyze_estimates(
     "Demystifing 1")
 table_11.linear.demystifing1 = results_11.linear.demystifing1$table
 fig_11.linear.demystifing1 = results_11.linear.demystifing1$fig
+
+results_11.linear.demystifing2 = analyze_estimates(
+    estimates_11.linear.demystifing2,
+    estimates_true.linear$demystifing2,
+    "Demystifing 2")
+table_11.linear.demystifing2 = results_11.linear.demystifing2$table
+fig_11.linear.demystifing2 = results_11.linear.demystifing2$fig
+
+results_11.linear.framework1 = analyze_estimates(
+    estimates_11.linear.framework1,
+    estimates_true.linear$framework1,
+    "Framework 1")
+table_11.linear.framework1 = results_11.linear.framework1$table
+fig_11.linear.framework1 = results_11.linear.framework1$fig
+
+results_11.linear.framework2 = analyze_estimates(
+    estimates_11.linear.framework2,
+    estimates_true.linear$framework2,
+    "Framework 2")
+table_11.linear.framework2 = results_11.linear.framework2$table
+fig_11.linear.framework2 = results_11.linear.framework2$fig
+
+results_11.linear.framework3 = analyze_estimates(
+    estimates_11.linear.framework3,
+    estimates_true.linear$framework3,
+    "Framework 3")
+table_11.linear.framework3 = results_11.linear.framework3$table
+fig_11.linear.framework3 = results_11.linear.framework3$fig
+
+results_11.linear.stable_eff = analyze_estimates(
+    estimates_11.linear.stable_eff,
+    estimates_true.linear$stable_eff,
+    "Stable and Efficient")
+table_11.linear.stable_eff = results_11.linear.stable_eff$table
+fig_11.linear.stable_eff = results_11.linear.stable_eff$fig
+
+results_11.linear.br = analyze_estimates(
+    estimates_11.linear.br,
+    estimates_true.linear$br,
+    "Bias-Reduced")
+table_11.linear.br = results_11.linear.br$table
+fig_11.linear.br = results_11.linear.br$fig
+
+results_11.logistic.improved_DR1 = analyze_estimates(
+    estimates_11.logistic.improved_DR1,
+    estimates_true.logistic$improved_DR1,
+    "Improved DR 1 (Demystifying 3)")
+table_11.logistic.improved_DR1 = results_11.logistic.improved_DR1$table
+fig_11.logistic.improved_DR1 = results_11.logistic.improved_DR1$fig
+
+results_11.logistic.improved_DR2 = analyze_estimates(
+    estimates_11.logistic.improved_DR2,
+    estimates_true.logistic$improved_DR2,
+    "Improved DR 2 (Demystifying 4)")
+table_11.logistic.improved_DR2 = results_11.logistic.improved_DR2$table
+fig_11.logistic.improved_DR2 = results_11.logistic.improved_DR2$fig
 ```
 
 ```{r output = "asis"}
@@ -1893,6 +2020,71 @@ print(table_11.linear.demystifing1)
 ```{r fig.width=10, fig.height=6}
 print(fig_11.linear.demystifing1)
 ```
+
+```{r output = "asis"}
+print(table_11.linear.demystifing2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_11.linear.demystifing2)
+```
+
+```{r output = "asis"}
+print(table_11.linear.framework1)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_11.linear.framework1)
+```
+
+```{r output = "asis"}
+print(table_11.linear.framework2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_11.linear.framework2)
+```
+
+```{r output = "asis"}
+print(table_11.linear.framework3)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_11.linear.framework3)
+```
+
+```{r output = "asis"}
+print(table_11.linear.stable_eff)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_11.linear.stable_eff)
+```
+
+```{r output = "asis"}
+print(table_11.linear.br)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_11.linear.br)
+```
+
+```{r output = "asis"}
+print(table_11.logistic.improved_DR1)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_11.logistic.improved_DR1)
+```
+
+```{r output = "asis"}
+print(table_11.logistic.improved_DR2)
+```
+
+```{r fig.width=10, fig.height=6}
+print(fig_11.logistic.improved_DR2)
+```
+
 
 ```{r include = FALSE}
 # Remove data from memory
