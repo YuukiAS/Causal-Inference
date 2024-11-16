@@ -2180,20 +2180,20 @@ fitted_model_01.logistic = pmclapply(1:n_rep, function(i) {
 ```{r label = "Missing Incorrect: Obtaining Parameters"}
 params_01.linear = pmclapply(1:n_rep, function(i) {
     list(
-        demystifing1 = obtain_params_list(fitted_model_01.linear[[i]]$demystifing1, prop_model = TRUE, impute_model = TRUE),
-        demystifing2 = obtain_params_list(fitted_model_01.linear[[i]]$demystifing2, prop_model = TRUE, impute_model = TRUE),
-        framework1 = obtain_params_list(fitted_model_01.linear[[i]]$framework1, prop_model = TRUE, impute_model = TRUE),
-        framework2 = obtain_params_list(fitted_model_01.linear[[i]]$framework2, prop_model = TRUE, impute_model = TRUE),
-        framework3 = obtain_params_list(fitted_model_01.linear[[i]]$framework3, prop_model = TRUE, impute_model = TRUE, prop.specify = TRUE, prop.correct = TRUE),
-        stable_eff = obtain_params_list(fitted_model_01.linear[[i]]$stable_eff, prop_model = TRUE, impute_model = TRUE),
-        br = obtain_params_list(fitted_model_01.linear[[i]]$br, prop_model = TRUE, impute_model = TRUE)
+        demystifing1 = obtain_params_list(fitted_model_01.linear[[i]]$demystifing1, prop_model = FALSE, impute_model = TRUE),
+        demystifing2 = obtain_params_list(fitted_model_01.linear[[i]]$demystifing2, prop_model = FALSE, impute_model = TRUE),
+        framework1 = obtain_params_list(fitted_model_01.linear[[i]]$framework1, prop_model = FALSE, impute_model = TRUE),
+        framework2 = obtain_params_list(fitted_model_01.linear[[i]]$framework2, prop_model = FALSE, impute_model = TRUE),
+        framework3 = obtain_params_list(fitted_model_01.linear[[i]]$framework3, prop_model = FALSE, impute_model = TRUE, prop.specify = TRUE, prop.correct = FALSE),
+        stable_eff = obtain_params_list(fitted_model_01.linear[[i]]$stable_eff, prop_model = FALSE, impute_model = TRUE),
+        br = obtain_params_list(fitted_model_01.linear[[i]]$br, prop_model = FALSE, impute_model = TRUE)
     )
 }, title = "params_01.linear")
 
 params_01.logistic = pmclapply(1:n_rep, function(i) {
     list(
-        improved_DR1 = obtain_params_list(fitted_model_01.logistic[[i]]$improved_DR1, prop_model = TRUE, impute_model = TRUE),
-        improved_DR2 = obtain_params_list(fitted_model_01.logistic[[i]]$improved_DR2, prop_model = TRUE, impute_model = TRUE)
+        improved_DR1 = obtain_params_list(fitted_model_01.logistic[[i]]$improved_DR1, prop_model = FALSE, impute_model = TRUE),
+        improved_DR2 = obtain_params_list(fitted_model_01.logistic[[i]]$improved_DR2, prop_model = FALSE, impute_model = TRUE)
     )
 }, title = "params_01.logistic")
 ```
@@ -2475,20 +2475,20 @@ fitted_model_10.logistic = pmclapply(1:n_rep, function(i) {
 ```{r label = "Imputation Incorrect: Obtaining Parameters"}
 params_10.linear = pmclapply(1:n_rep, function(i) {
     list(
-        demystifing1 = obtain_params_list(fitted_model_10.linear[[i]]$demystifing1, prop_model = TRUE, impute_model = TRUE),
-        demystifing2 = obtain_params_list(fitted_model_10.linear[[i]]$demystifing2, prop_model = TRUE, impute_model = TRUE),
-        framework1 = obtain_params_list(fitted_model_10.linear[[i]]$framework1, prop_model = TRUE, impute_model = TRUE),
-        framework2 = obtain_params_list(fitted_model_10.linear[[i]]$framework2, prop_model = TRUE, impute_model = TRUE),
-        framework3 = obtain_params_list(fitted_model_10.linear[[i]]$framework3, prop_model = TRUE, impute_model = TRUE, prop.specify = TRUE, prop.correct = TRUE),
-        stable_eff = obtain_params_list(fitted_model_10.linear[[i]]$stable_eff, prop_model = TRUE, impute_model = TRUE),
-        br = obtain_params_list(fitted_model_10.linear[[i]]$br, prop_model = TRUE, impute_model = TRUE)
+        demystifing1 = obtain_params_list(fitted_model_10.linear[[i]]$demystifing1, prop_model = TRUE, impute_model = FALSE),
+        demystifing2 = obtain_params_list(fitted_model_10.linear[[i]]$demystifing2, prop_model = TRUE, impute_model = FALSE),
+        framework1 = obtain_params_list(fitted_model_10.linear[[i]]$framework1, prop_model = TRUE, impute_model = FALSE),
+        framework2 = obtain_params_list(fitted_model_10.linear[[i]]$framework2, prop_model = TRUE, impute_model = FALSE),
+        framework3 = obtain_params_list(fitted_model_10.linear[[i]]$framework3, prop_model = TRUE, impute_model = FALSE, prop.specify = TRUE, prop.correct = TRUE),
+        stable_eff = obtain_params_list(fitted_model_10.linear[[i]]$stable_eff, prop_model = TRUE, impute_model = FALSE),
+        br = obtain_params_list(fitted_model_10.linear[[i]]$br, prop_model = TRUE, impute_model = FALSE)
     )
 }, title = "params_10.linear")
 
 params_10.logistic = pmclapply(1:n_rep, function(i) {
     list(
-        improved_DR1 = obtain_params_list(fitted_model_10.logistic[[i]]$improved_DR1, prop_model = TRUE, impute_model = TRUE),
-        improved_DR2 = obtain_params_list(fitted_model_10.logistic[[i]]$improved_DR2, prop_model = TRUE, impute_model = TRUE)
+        improved_DR1 = obtain_params_list(fitted_model_10.logistic[[i]]$improved_DR1, prop_model = TRUE, impute_model = FALSE),
+        improved_DR2 = obtain_params_list(fitted_model_10.logistic[[i]]$improved_DR2, prop_model = TRUE, impute_model = FALSE)
     )
 }, title = "params_10.logistic")
 ```
@@ -2768,20 +2768,20 @@ fitted_model_00.logistic = pmclapply(1:n_rep, function(i) {
 ```{r label = "Both Incorrect: Obtaining Parameters"}
 params_00.linear = pmclapply(1:n_rep, function(i) {
     list(
-        demystifing1 = obtain_params_list(fitted_model_00.linear[[i]]$demystifing1, prop_model = TRUE, impute_model = TRUE),
-        demystifing2 = obtain_params_list(fitted_model_00.linear[[i]]$demystifing2, prop_model = TRUE, impute_model = TRUE),
-        framework1 = obtain_params_list(fitted_model_00.linear[[i]]$framework1, prop_model = TRUE, impute_model = TRUE),
-        framework2 = obtain_params_list(fitted_model_00.linear[[i]]$framework2, prop_model = TRUE, impute_model = TRUE),
-        framework3 = obtain_params_list(fitted_model_00.linear[[i]]$framework3, prop_model = TRUE, impute_model = TRUE, prop.specify = TRUE, prop.correct = TRUE),
-        stable_eff = obtain_params_list(fitted_model_00.linear[[i]]$stable_eff, prop_model = TRUE, impute_model = TRUE),
-        br = obtain_params_list(fitted_model_00.linear[[i]]$br, prop_model = TRUE, impute_model = TRUE)
+        demystifing1 = obtain_params_list(fitted_model_00.linear[[i]]$demystifing1, prop_model = FALSE, impute_model = FALSE),
+        demystifing2 = obtain_params_list(fitted_model_00.linear[[i]]$demystifing2, prop_model = FALSE, impute_model = FALSE),
+        framework1 = obtain_params_list(fitted_model_00.linear[[i]]$framework1, prop_model = FALSE, impute_model = FALSE),
+        framework2 = obtain_params_list(fitted_model_00.linear[[i]]$framework2, prop_model = FALSE, impute_model = FALSE),
+        framework3 = obtain_params_list(fitted_model_00.linear[[i]]$framework3, prop_model = FALSE, impute_model = FALSE, prop.specify = TRUE, prop.correct = FALSE),
+        stable_eff = obtain_params_list(fitted_model_00.linear[[i]]$stable_eff, prop_model = FALSE, impute_model = FALSE),
+        br = obtain_params_list(fitted_model_00.linear[[i]]$br, prop_model = FALSE, impute_model = FALSE)
     )
 }, title = "params_00.linear")
 
 params_00.logistic = pmclapply(1:n_rep, function(i) {
     list(
-        improved_DR1 = obtain_params_list(fitted_model_00.logistic[[i]]$improved_DR1, prop_model = TRUE, impute_model = TRUE),
-        improved_DR2 = obtain_params_list(fitted_model_00.logistic[[i]]$improved_DR2, prop_model = TRUE, impute_model = TRUE)
+        improved_DR1 = obtain_params_list(fitted_model_00.logistic[[i]]$improved_DR1, prop_model = FALSE, impute_model = FALSE),
+        improved_DR2 = obtain_params_list(fitted_model_00.logistic[[i]]$improved_DR2, prop_model = FALSE, impute_model = FALSE)
     )
 }, title = "params_00.logistic")
 ```
