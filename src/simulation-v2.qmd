@@ -48,7 +48,7 @@ nrep_large = 5000
 nrep_normal = 500
 nrep_small = 50
 
-N_true = 50000
+N_true = 500000
 N_large = 5000
 N_normal = 500
 N_small = 50
@@ -1291,9 +1291,9 @@ Fitted.model6 = setRefClass("Fitted.model6",
 
 ## Bias-Reduced Doubly Robust Estimation
 
-Scenario 1 is the same as demystifing paper.
+Scenario 2 is the same as demystifing paper.
 
-### Scenario 2
+### Scenario 1
 
 Incorrect outcome model: $m_0(x)=1+x$
 Incorrect propensity model: $\pi_0(x)=expit(\varepsilon \cdot x)$
@@ -1699,23 +1699,23 @@ analyze_estimates = function(estimates, mean, caption = NULL) {
     rmse.estimators = sqrt(var.estimators + bias.estimators^2)
 
     df.estimators = data.frame(
-        Estimators=names.estimators,
-        Bias=bias.estimators,
-        MCSD=mcsd.estimators,
-        RMSE=rmse.estimators
+        Estimators=gsub("_", "\\\\_", names.estimators),
+        Bias=round(bias.estimators, 3),
+        MCSD=round(mcsd.estimators, 3),
+        RMSE=round(rmse.estimators, 3)
     )
 
-    min_bias_idx <- which.min(abs(df.estimators$Bias))
-    min_mcsd_idx <- which.min(df.estimators$MCSD)
-    min_rmse_idx <- which.min(df.estimators$RMSE)
+    min_bias_idx = which.min(abs(df.estimators$Bias))
+    min_mcsd_idx = which.min(df.estimators$MCSD)
+    min_rmse_idx = which.min(df.estimators$RMSE)
 
     table = df.estimators %>%
             dplyr::mutate(
-                Bias = ifelse(dplyr::row_number() == min_bias_idx, cell_spec(Bias, color = "red"), Bias),
-                MCSD = ifelse(dplyr::row_number() == min_mcsd_idx, cell_spec(MCSD, color = "red"), MCSD),
-                RMSE = ifelse(dplyr::row_number() == min_rmse_idx, cell_spec(RMSE, color = "red"), RMSE)
+                Bias = ifelse(dplyr::row_number() == min_bias_idx, cell_spec(Bias, color = "red", format = "latex"), Bias),
+                MCSD = ifelse(dplyr::row_number() == min_mcsd_idx, cell_spec(MCSD, color = "red", format = "latex"), MCSD),
+                RMSE = ifelse(dplyr::row_number() == min_rmse_idx, cell_spec(RMSE, color = "red", format = "latex"), RMSE)
             ) %>%
-            kable(caption = caption, digits = 3, escape = FALSE, format = "latex") %>%
+            kable(caption = caption, digits = 3, escape = FALSE, booktabs = FALSE) %>%
             row_spec(0, bold = TRUE) %>%
             kable_styling(latex_options = "striped")
 
@@ -1839,7 +1839,7 @@ estimates_true.logistic = list(
 ```
 
 
-```{r label = "True Mean: Visualization", output = "asis"}
+```{r label = "True Mean: Visualization"}
 df_true.all = data.frame(
     Scenario = c("Demystifying 1", 
             "Demystifying 2", 
@@ -1864,7 +1864,7 @@ kable(df_true.all, escape = FALSE, row.names = FALSE, digits = 3) %>%
 
 ## Both Models are Correct
 
-```{r label = "Both Correct: Generating Data"}
+```{r label = "Both Correct: Generating Data", eval = FALSE}
 # a list of n_rep elements, each element is also a list of lists (triple lists)
 data_11.linear = pmclapply(1:n_rep, function(i) {
     list(
@@ -1886,7 +1886,7 @@ data_11.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "data_11.logistic")
 ```
 
-```{r label = "Both Correct: Fitting Model"}
+```{r label = "Both Correct: Fitting Model", eval = FALSE}
 fitted_model_11.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = do.call(Fitted.model1$new, data_11.linear[[i]]$demystifing1$data),
@@ -1907,7 +1907,7 @@ fitted_model_11.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "fitted_model_11.logistic")
 ```
 
-```{r label = "Both Correct: Obtaining Parameters"}
+```{r label = "Both Correct: Obtaining Parameters", eval = FALSE}
 params_11.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = obtain_params_list(fitted_model_11.linear[[i]]$demystifing1, prop_model = TRUE, impute_model = TRUE),
@@ -1928,7 +1928,7 @@ params_11.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "params_11.logistic")
 ```
 
-```{r label = "Both Correct: Obtaining Estimates"}
+```{r label = "Both Correct: Obtaining Estimates", eval = FALSE}
 estimates_11.linear.demystifing1 = pmclapply(1:n_rep, function(i) {
     c(
         unlist(obtain_estimates(params_11.linear[[i]]$demystifing1, Non_DR_Estimators.linear)),
@@ -1975,7 +1975,8 @@ estimates_11.linear.stable_eff = pmclapply(1:n_rep, function(i) {
 estimates_11.linear.br = pmclapply(1:n_rep, function(i) {
     c(
         unlist(obtain_estimates(params_11.linear[[i]]$br, Non_DR_Estimators.linear)),
-        unlist(obtain_estimates(params_11.linear[[i]]$br, DR_Estimators.linear))
+        # Specical case: DR_BR is not included due to incompatible format
+        unlist(obtain_estimates(params_11.linear[[i]]$br, DR_Estimators.linear[-7]))
     )
 }, title = "estimates_11.linear.br")
 
@@ -1994,7 +1995,7 @@ estimates_11.logistic.improved_DR2 = pmclapply(1:n_rep, function(i) {
 }, title = "estimates_11.logistic.improved_DR2")
 ```
 
-```{r include = FALSE, label = "Both Correct: Saving Data"}
+```{r include = FALSE, label = "Both Correct: Saving Data", eval = FALSE}
 save(params_11.linear,
      params_11.logistic,
      estimates_11.linear.demystifing1,
@@ -2010,7 +2011,7 @@ save(params_11.linear,
 ```
 
 
-```{r include = FALSE, label = "Both Correct: Loading Data", eval = FALSE}
+```{r include = FALSE, label = "Both Correct: Loading Data", eval = TRUE}
 load("data/simulation-v2/11.RData")
 ```
 
@@ -2160,7 +2161,7 @@ rm(data_11.linear, data_11.logistic, fitted_model_11.linear, fitted_model_11.log
 ## Missing Model is Incorrect
 
 
-```{r label = "Missing Incorrect: Generating Data"}
+```{r label = "Missing Incorrect: Generating Data", eval = FALSE}
 data_01.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = data.gen1(N),
@@ -2181,7 +2182,7 @@ data_01.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "data_01.logistic")
 ```
 
-```{r label = "Missing Incorrect: Fitting Model"}
+```{r label = "Missing Incorrect: Fitting Model", eval = FALSE}
 fitted_model_01.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = do.call(Fitted.model1$new, data_01.linear[[i]]$demystifing1$data),
@@ -2202,7 +2203,7 @@ fitted_model_01.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "fitted_model_01.logistic")
 ```
 
-```{r label = "Missing Incorrect: Obtaining Parameters"}
+```{r label = "Missing Incorrect: Obtaining Parameters", eval = FALSE}
 params_01.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = obtain_params_list(fitted_model_01.linear[[i]]$demystifing1, prop_model = FALSE, impute_model = TRUE),
@@ -2223,7 +2224,7 @@ params_01.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "params_01.logistic")
 ```
 
-```{r label = "Missing Incorrect: Obtaining Estimates"}
+```{r label = "Missing Incorrect: Obtaining Estimates", eval = FALSE}
 estimates_01.linear.demystifing1 = pmclapply(1:n_rep, function(i) {
     c(
         unlist(obtain_estimates(params_01.linear[[i]]$demystifing1, Non_DR_Estimators.linear)),
@@ -2270,7 +2271,7 @@ estimates_01.linear.stable_eff = pmclapply(1:n_rep, function(i) {
 estimates_01.linear.br = pmclapply(1:n_rep, function(i) {
     c(
         unlist(obtain_estimates(params_01.linear[[i]]$br, Non_DR_Estimators.linear)),
-        unlist(obtain_estimates(params_01.linear[[i]]$br, DR_Estimators.linear))
+        unlist(obtain_estimates(params_01.linear[[i]]$br, DR_Estimators.linear[-7]))
     )
 }, title = "estimates_01.linear.br")
 
@@ -2289,7 +2290,7 @@ estimates_01.logistic.improved_DR2 = pmclapply(1:n_rep, function(i) {
 }, title = "estimates_01.logistic.improved_DR2")
 ```
 
-```{r include = FALSE, label = "Missing Incorrect: Saving Data"}
+```{r include = FALSE, label = "Missing Incorrect: Saving Data", eval = FALSE}
 save(params_01.linear,
      params_01.logistic,
      estimates_01.linear.demystifing1,
@@ -2305,7 +2306,7 @@ save(params_01.linear,
 ```
 
 
-```{r include = FALSE, label = "Missing Incorrect: Loading Data", eval = FALSE}
+```{r include = FALSE, label = "Missing Incorrect: Loading Data", eval = TRUE}
 load("data/simulation-v2/01.RData")
 ```
 
@@ -2454,7 +2455,7 @@ rm(data_01.linear, data_01.logistic, fitted_model_01.linear, fitted_model_01.log
 
 ## Imputation Model is Incorrect
 
-```{r label = "Imputation Incorrect: Generating Data"}
+```{r label = "Imputation Incorrect: Generating Data", eval = FALSE}
 # a list of n_rep elements, each element is also a list of lists (triple lists)
 data_10.linear = pmclapply(1:n_rep, function(i) {
     list(
@@ -2476,7 +2477,7 @@ data_10.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "data_10.logistic")
 ```
 
-```{r label = "Imputation Incorrect: Fitting Model"}
+```{r label = "Imputation Incorrect: Fitting Model", eval = FALSE}
 fitted_model_10.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = do.call(Fitted.model1$new, data_10.linear[[i]]$demystifing1$data),
@@ -2497,7 +2498,7 @@ fitted_model_10.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "fitted_model_10.logistic")
 ```
 
-```{r label = "Imputation Incorrect: Obtaining Parameters"}
+```{r label = "Imputation Incorrect: Obtaining Parameters", eval = FALSE, eval = FALSE}
 params_10.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = obtain_params_list(fitted_model_10.linear[[i]]$demystifing1, prop_model = TRUE, impute_model = FALSE),
@@ -2518,7 +2519,7 @@ params_10.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "params_10.logistic")
 ```
 
-```{r label = "Imputation Incorrect: Obtaining Estimates"}
+```{r label = "Imputation Incorrect: Obtaining Estimates", eval = FALSE}
 estimates_10.linear.demystifing1 = pmclapply(1:n_rep, function(i) {
     c(
         unlist(obtain_estimates(params_10.linear[[i]]$demystifing1, Non_DR_Estimators.linear)),
@@ -2565,7 +2566,7 @@ estimates_10.linear.stable_eff = pmclapply(1:n_rep, function(i) {
 estimates_10.linear.br = pmclapply(1:n_rep, function(i) {
     c(
         unlist(obtain_estimates(params_10.linear[[i]]$br, Non_DR_Estimators.linear)),
-        unlist(obtain_estimates(params_10.linear[[i]]$br, DR_Estimators.linear))
+        unlist(obtain_estimates(params_10.linear[[i]]$br, DR_Estimators.linear[-7]))
     )
 }, title = "estimates_10.linear.br")
 
@@ -2584,7 +2585,7 @@ estimates_10.logistic.improved_DR2 = pmclapply(1:n_rep, function(i) {
 }, title = "estimates_10.logistic.improved_DR2")
 ```
 
-```{r include = FALSE, label = "Imputation Incorrect: Saving Data"}
+```{r include = FALSE, label = "Imputation Incorrect: Saving Data", eval = FALSE}
 save(params_10.linear,
      params_10.logistic,
      estimates_10.linear.demystifing1,
@@ -2600,7 +2601,7 @@ save(params_10.linear,
 ```
 
 
-```{r include = FALSE, label = "Imputation Incorrect: Loading Data", eval = FALSE}
+```{r include = FALSE, label = "Imputation Incorrect: Loading Data", eval = TRUE}
 load("data/simulation-v2/10.RData")
 ```
 
@@ -2747,7 +2748,7 @@ rm(data_10.linear, data_10.logistic, fitted_model_10.linear, fitted_model_10.log
 ```
 
 ## Both Models are incorrect
-```{r label = "Both Incorrect: Generating Data"}
+```{r label = "Both Incorrect: Generating Data", eval = FALSE}
 # a list of n_rep elements, each element is also a list of lists (triple lists)
 data_00.linear = pmclapply(1:n_rep, function(i) {
     list(
@@ -2769,7 +2770,7 @@ data_00.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "data_00.logistic")
 ```
 
-```{r label = "Both Incorrect: Fitting Model"}
+```{r label = "Both Incorrect: Fitting Model", eval = FALSE}
 fitted_model_00.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = do.call(Fitted.model1$new, data_00.linear[[i]]$demystifing1$data),
@@ -2790,7 +2791,7 @@ fitted_model_00.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "fitted_model_00.logistic")
 ```
 
-```{r label = "Both Incorrect: Obtaining Parameters"}
+```{r label = "Both Incorrect: Obtaining Parameters", eval = FALSE}
 params_00.linear = pmclapply(1:n_rep, function(i) {
     list(
         demystifing1 = obtain_params_list(fitted_model_00.linear[[i]]$demystifing1, prop_model = FALSE, impute_model = FALSE),
@@ -2811,7 +2812,7 @@ params_00.logistic = pmclapply(1:n_rep, function(i) {
 }, title = "params_00.logistic")
 ```
 
-```{r label = "Both Incorrect: Obtaining Estimates"}
+```{r label = "Both Incorrect: Obtaining Estimates", eval = FALSE}
 estimates_00.linear.demystifing1 = pmclapply(1:n_rep, function(i) {
     c(
         unlist(obtain_estimates(params_00.linear[[i]]$demystifing1, Non_DR_Estimators.linear)),
@@ -2858,7 +2859,7 @@ estimates_00.linear.stable_eff = pmclapply(1:n_rep, function(i) {
 estimates_00.linear.br = pmclapply(1:n_rep, function(i) {
     c(
         unlist(obtain_estimates(params_00.linear[[i]]$br, Non_DR_Estimators.linear)),
-        unlist(obtain_estimates(params_00.linear[[i]]$br, DR_Estimators.linear))
+        unlist(obtain_estimates(params_00.linear[[i]]$br, DR_Estimators.linear[-7]))
     )
 }, title = "estimates_00.linear.br")
 
@@ -2877,7 +2878,7 @@ estimates_00.logistic.improved_DR2 = pmclapply(1:n_rep, function(i) {
 }, title = "estimates_00.logistic.improved_DR2")
 ```
 
-```{r include = FALSE, label = "Both Incorrect: Saving Data"}
+```{r include = FALSE, label = "Both Incorrect: Saving Data", eval = FALSE}
 save(params_00.linear,
      params_00.logistic,
      estimates_00.linear.demystifing1,
@@ -2893,7 +2894,7 @@ save(params_00.linear,
 ```
 
 
-```{r include = FALSE, label = "Both Incorrect: Loading Data", eval = FALSE}
+```{r include = FALSE, label = "Both Incorrect: Loading Data", eval = TRUE}
 load("data/simulation-v2/00.RData")
 ```
 
