@@ -1,0 +1,446 @@
+---
+title: 'Doubly Robust Estimation for Longitudinal Data'
+author: 'Mingcheng Hu'
+toc: true
+toc-title: "Table of Contents"
+format:
+    pdf:
+        keep-tex: true
+        include-in-header: 
+            text: |
+                \usepackage{fvextra}
+                \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+                \DefineVerbatimEnvironment{OutputCode}{Verbatim}{breaklines,commandchars=\\\{\}}
+---
+
+# Set up Environment
+
+```{r}
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(parallel)
+library(mcprogress)
+
+set.seed(1234)
+options(digits = 6)
+message("Number of cores: ", detectCores())
+# * Slurm will use more cores than assigned in Slurm, need to adjust accordingly
+message("mc.cores is set to ", max(1, as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores())) - 2))
+options(mc.cores = max(1, as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores())) - 2))
+```
+
+```{r}
+expit <- function(x) 1 / (1 + exp(-x)) # plogis()
+logit <- function(p) log(p / (1 - p)) # qlogis()
+```
+
+```{r label = "Constants"}
+nrep_large <- 5000
+nrep_normal <- 1000
+nrep_small <- 100
+
+N_true <- 500000
+N_large <- 5000
+N_normal <- 500
+N_small <- 50
+
+nrep <- nrep_normal # modify for different number of replications
+# * Note: y_imputed will fail for logistic model if N is small
+N <- N_large # modify for different size of data
+```
+
+
+# Simulation: Longitudinal Data
+
+```{r}
+impute_formula_1.correct <- as.formula("~ v11 + v11:v13")
+impute_formula_1.incorrect <- as.formula("~ v11 + v12")
+impute_formula_2.correct <- as.formula("~ I(v11^2) + v12 + I(v2^2) + v12:v2")
+impute_formula_2.incorrect <- as.formula("~ v11 + I(v12^2) + I(v13^2) + v2")
+
+# For example, in prop_formula_2.correct D=1 is equivalent to C=2
+prop_formula_1.correct <- as.formula("~ I11 + I12 + I13 + I11:I12")
+prop_formula_1.incorrect <- as.formula("~ I12 + I13")
+prop_formula_2.correct <- as.formula("~ I11 + I12 + I13 + I11:I12 + I2 + I2:I13")
+prop_formula_2.incorrect <- as.formula("~ I2")
+
+```
+
+```{r}
+data_gen <- function(
+    impute_formula_1,
+    impute_formula_2,
+    prop_formula_1,
+    prop_formula_2,
+    N = N_normal,
+    ground_truth = FALSE) {
+    # * Currrently, we use same data while changing the models when estimating the outcome
+    beta1 <- c(0, 3, -2)
+    beta2 <- c(0, -3, 3, 1, -2)
+    alpha1 <- c(-1, 1, 1, -1, -1)
+    alpha2 <- c(0, 1, 1, 0, -1, 0, -2)
+
+    # These applies to both correct and incorrect formulas
+    v11 <- rnorm(N, 0, 1)
+    v12 <- rnorm(N, 0, 1)
+    v13 <- rnorm(N, 0, 1)
+    I11 <- ifelse(v11 > 0, 1, 0)
+    I12 <- ifelse(v12 > 0, 1, 0)
+    I13 <- ifelse(v13 > 0, 1, 0)
+    L1 <- data.frame(v11, v12, v13, I11, I12, I13)
+    X1_impute <- model.matrix(impute_formula_1, data = L1)
+    X1_prop <- model.matrix(prop_formula_1, data = L1)
+    s1 <- X1_impute %*% beta1 # s_1(L_1; beta) in the paper
+    pi1 <- expit(X1_prop %*% alpha1) # propensity score of censoring at time 1
+    D1 <- rbinom(N, 1, pi1)
+
+    # v2 <- rnorm(s1, 1)
+    v2 <- sapply(s1, function(x) rnorm(1, x, 1))
+    I2 <- ifelse(v2 > 0, 1, 0)
+    L2 <- data.frame(v2, I2)
+    X2_impute <- model.matrix(impute_formula_2, data = cbind(L1, L2))
+    X2_prop <- model.matrix(prop_formula_2, data = cbind(L1, L2))
+    s2 <- X2_impute %*% beta2 # s_2(L_2; beta) in the paper
+    pi2 <- expit(X2_prop %*% alpha2) # propensity score of censoring at time 2
+    D2 <- rbinom(N, 1, pi2)
+
+    # y <- rnorm(s2, 1)
+    y <- sapply(s2, function(x) rnorm(1, x, 1)) # The final outcome
+    L3 <- data.frame(y)
+
+    if (ground_truth) {
+        y_true <- mean(y)
+    }
+
+    C <- ifelse(D1 == 1, 1, ifelse(D2 == 1, 2, 3))
+
+    data <- data.frame(L1, L2, L3, D1, D2)
+    # * Note: NA means missing while NULL means no variable and should not be used here
+    L2_vars <- names(L2)
+    L3_vars <- names(L3)
+    # across() makes it easy to apply the same transformation to multiple columns
+    # all_of() is used to select variables from character vectors
+    data <- data %>%
+        mutate(across(all_of(L2_vars), ~ ifelse(C >= 2, ., NA))) %>%
+        mutate(across(all_of(L3_vars), ~ ifelse(C >= 3, ., NA))) %>%
+        mutate(D2 = ifelse(C >= 2, D2, NA))
+
+    if (ground_truth) {
+        return(list(data = data, C = C, y_true = y_true))
+    } else {
+        return(list(data = data, C = C))
+    }
+}
+```
+
+```{r label = "Generate Data"}
+data_true <- data_gen(
+    impute_formula_1.correct,
+    impute_formula_2.correct,
+    prop_formula_1.correct,
+    prop_formula_2.correct,
+    N = N_true,
+    ground_truth = TRUE
+)
+(mu_true <- mean(data_true$y_true))
+table(data_true$C) / length(data_true$C)
+```
+
+Under this configuration, $L_2$ and $L_3$ have approximately 33% and 70% missingness, respectively.
+
+```{r}
+data <- lapply(1:nrep, function(i) {
+    data_gen(
+        impute_formula_1.correct,
+        impute_formula_2.correct,
+        prop_formula_1.correct,
+        prop_formula_2.correct
+    )
+})
+```
+
+
+```{r label = "Estimators-HT"}
+HT <- function(
+    data,
+    C,
+    prop_formula_1,
+    prop_formula_2) {
+    prop_formula_2 <- update(prop_formula_2, D2 ~ .)
+    prop_formula_1 <- update(prop_formula_1, D1 ~ .)
+
+    # * Obtain alpha
+    # Since we don't impute here, we can start at the first time point
+    prop_model_1 <- glm(
+        prop_formula_1,
+        family = binomial, data = data
+    )
+    prop_model_2 <- glm(
+        prop_formula_2,
+        family = binomial, data = subset(data, C >= 2)
+    )
+    alpha_1 <- prop_model_1$coefficients
+    alpha_2 <- prop_model_2$coefficients
+
+    # * For those who are uncensored through the end, obtain the hazard for each subject with Delta = 1 at each time point
+    lambda1 <- predict(prop_model_1, subset(data, C == 3), type = "response")
+    lambda2 <- predict(prop_model_2, subset(data, C == 3), type = "response")
+    pi1 <- 1 - lambda1 # define P(C>1)=1
+    pi2 <- (1 - lambda1) * (1 - lambda2) # define P(C>2)=P(C=3)
+    mu <- sum(subset(data, C == 3)$y / pi2) / length(data$y)
+    return(mu)
+}
+# print(HT(
+#     data_true$data,
+#     data_true$C,
+#     prop_formula_1.correct,
+#     prop_formula_2.correct
+# ))
+```
+
+```{r}
+result_HT.0 <- sapply(data, function(data) HT(data$data, data$C, prop_formula_1.incorrect, prop_formula_2.incorrect))
+mu_HT.0 <- mean(result_HT.0)
+sd_HT.0 <- sd(result_HT.0)
+result_HT.1 <- sapply(data, function(data) HT(data$data, data$C, prop_formula_1.correct, prop_formula_2.correct))
+mu_HT.1 <- mean(result_HT.1)
+sd_HT.1 <- sd(result_HT.1)
+
+kable(
+    data.frame(
+        mu_HT.0 - mu_true,
+        sd_HT.0,
+        mu_HT.1 - mu_true,
+        sd_HT.1
+    ),
+    col.names = c("HT(0): Bias", "HT(0): SD", "HT(1): Bias", "HT(1): SD")
+)
+```
+
+```{r label = "Estimators-OR"}
+OR <- function(
+    data,
+    C,
+    impute_formula_1,
+    impute_formula_2) {
+    # Time: m=3
+    data$h3 <- NA
+    data$h3[C == 3] <- data$y[C == 3]
+
+    # Time: m = 2
+    impute_formula_2 <- update(impute_formula_2, h3 ~ .)
+    impute_model_2 <- lm(impute_formula_2, data = subset(data, C == 3))
+
+    data$h2 <- NA
+    data$h2[C >= 2] <- predict(impute_model_2, subset(data, C >= 2)) # define H2=E(H3|C>=3,L2)
+
+    # Time: m = 1
+    # * We need to use both imputation models to get h1, not just the first one!
+    impute_formula_1 <- update(impute_formula_1, v2 ~ .)
+    impute_model_1 <- lm(impute_formula_1, data = subset(data, C >= 2))
+    data$v2_hat <- predict(impute_model_1, data) # replace v2 (with missing values) with the imputed value
+
+    # * Replace all v2 with v2_hat and set response to h2 instead of h3
+    impute_formula_2 <- update(impute_formula_2, h2 ~ .)
+    impute_formula_2_str <- deparse(impute_formula_2)
+    impute_formula_2 <- as.formula(gsub("v2", "v2_hat", impute_formula_2_str))
+    impute_model_2 <- lm(impute_formula_2, data = subset(data, C >= 2))
+    data$h1 <- predict(impute_model_2, data) # define H1=E(H2|C>=1,L1)
+    mu <- mean(data$h1)
+    return(mu)
+}
+```
+
+
+```{r}
+result_OR.0 <- sapply(data, function(data) OR(data$data, data$C, impute_formula_1.incorrect, impute_formula_2.incorrect))
+mu_OR.0 <- mean(result_OR.0)
+sd_OR.0 <- sd(result_OR.0)
+result_OR.1 <- sapply(data, function(data) OR(data$data, data$C, impute_formula_1.correct, impute_formula_2.correct))
+mu_OR.1 <- mean(result_OR.1)
+sd_OR.1 <- sd(result_OR.1)
+
+kable(
+    data.frame(
+        mu_OR.0 - mu_true,
+        sd_OR.0,
+        mu_OR.1 - mu_true,
+        sd_OR.1
+    ),
+    col.names = c("OR(0): Bias", "OR(0): SD", "OR(1): Bias", "OR(1): SD")
+)
+```
+
+```{r label = "Estimators-DR"}
+DR <- function(
+    data,
+    C,
+    impute_formula_1,
+    impute_formula_2,
+    prop_formula_1,
+    prop_formula_2) {
+    # * Step 1: Compute MLE of alpha from observed data
+    prop_formula_2 <- update(prop_formula_2, D2 ~ .)
+    prop_formula_1 <- update(prop_formula_1, D1 ~ .)
+
+    # Obtain alpha
+    # Since we don't impute here, we can start at the first time point
+    prop_model_1 <- glm(
+        prop_formula_1,
+        family = binomial, data = data
+    )
+    prop_model_2 <- glm(
+        prop_formula_2,
+        family = binomial, data = subset(data, C >= 2)
+    )
+    alpha_1 <- prop_model_1$coefficients
+    alpha_2 <- prop_model_2$coefficients
+
+    # * Different from HT, here lambda1 and lambda2 are not the same length as those with C=3
+    data$lambda1 <- predict(prop_model_1, data, type = "response")
+    lambda2 <- predict(prop_model_2, subset(data, C >= 2), type = "response")
+    data$lambda2 <- NA
+    data$lambda2[C >= 2] <- lambda2
+    data$pi1 <- 1 - data$lambda1 # define P(C>1)
+    data$pi2 <- NA
+    data$pi2[C >= 2] <- (1 - data$lambda1[C >= 2]) * (1 - data$lambda2[C >= 2]) # define P(C>2)
+
+    # * Step2: Select a particular estimating equation d
+    estimating_equation <- function(mu,
+                                    data,
+                                    C,
+                                    impute_formula_1,
+                                    impute_formula_2) {
+        # * Step3: Set H_{k+1} to d
+        data$h3 <- NA
+        data$h3[C == 3] <- data$y[C == 3] - mu
+
+        # * Step4: For m = K+1, ..., 2:
+        # * Step4a: For subjects with C>=m, obtain estimator of phi and beta by IRLS
+        # * Step4b: For subjects with C>=m-1, predict H_{m-1}
+
+        # Ref P968
+        # Time: m = 3
+        mixed_formula_2 <- update(impute_formula_2, h3 ~ . + I(1 / pi2))
+        glmod2 <- glm(mixed_formula_2, family = gaussian, data = subset(data, C == 3)) # *glm will use IRLS to fit the model
+        data$h2[C >= 2] <- predict(glmod2, subset(data, C >= 2)) # only those with C>=2 have h2
+
+        # Time: m = 2
+        mixed_formula_1 <- update(impute_formula_1, h2 ~ . + I(1 / pi1))
+
+        glmod1 <- glm(mixed_formula_1, family = gaussian, data = subset(data, C >= 2))
+        data$h1[C >= 1] <- predict(glmod1, data) # Since all observations C>=1, h1 for all can be predicted
+
+        mu <- mean(data$h1)
+        return(mu)
+    }
+
+    objective <- function(mu) {
+        estimating_equation(
+            mu,
+            data,
+            C,
+            impute_formula_1,
+            impute_formula_2
+        )
+    }
+
+    tryCatch(
+        {
+            mu <- uniroot(
+                f = objective,
+                interval = c(
+                    min(data$y, na.rm = TRUE) - sd(data$y, na.rm = TRUE),
+                    max(data$y, na.rm = TRUE) + sd(data$y, na.rm = TRUE)
+                ),
+                tol = 1e-6
+            )
+            return(mu$root)
+        },
+        error = function(e) {
+            print("Error when solving the estimating equation")
+            return(NA)
+        }
+    )
+}
+# print(DR(
+#     data_true$data,
+#     data_true$C,
+#     impute_formula_1.correct,
+#     impute_formula_2.correct,
+#     prop_formula_1.correct,
+#     prop_formula_2.correct
+# ))
+```
+
+
+```{r}
+result_DR.00 <- unlist(unlist(pmclapply(data, function(data) {
+    DR(
+        data$data,
+        data$C,
+        impute_formula_1.incorrect,
+        impute_formula_2.incorrect,
+        prop_formula_1.incorrect,
+        prop_formula_2.incorrect
+    )
+})))
+mu_DR.00 <- mean(result_DR.00, na.rm = TRUE)
+sd_DR.00 <- sd(result_DR.00, na.rm = TRUE)
+result_DR.01 <- unlist(unlist(pmclapply(data, function(data) {
+    DR(
+        data$data,
+        data$C,
+        impute_formula_1.incorrect,
+        impute_formula_2.correct,
+        prop_formula_1.incorrect,
+        prop_formula_2.correct
+    )
+})))
+mu_DR.01 <- mean(result_DR.01, na.rm = TRUE)
+sd_DR.01 <- sd(result_DR.01, na.rm = TRUE)
+result_DR.10 <- unlist(unlist(pmclapply(data, function(data) {
+    DR(
+        data$data,
+        data$C,
+        impute_formula_1.incorrect,
+        impute_formula_2.incorrect,
+        prop_formula_1.correct,
+        prop_formula_2.correct
+    )
+})))
+mu_DR.10 <- mean(result_DR.10, na.rm = TRUE)
+sd_DR.10 <- sd(result_DR.10, na.rm = TRUE)
+result_DR.11 <- unlist(unlist(pmclapply(data, function(data) {
+    DR(
+        data$data,
+        data$C,
+        impute_formula_1.correct,
+        impute_formula_2.correct,
+        prop_formula_1.correct,
+        prop_formula_2.correct
+    )
+})))
+mu_DR.11 <- mean(result_DR.11, na.rm = TRUE)
+sd_DR.11 <- sd(result_DR.11, na.rm = TRUE)
+
+kable(
+    data.frame(
+        mu_DR.00 - mu_true,
+        sd_DR.00,
+        mu_DR.01 - mu_true,
+        sd_DR.01,
+        mu_DR.10 - mu_true,
+        sd_DR.10,
+        mu_DR.11 - mu_true,
+        sd_DR.11
+    ),
+    col.names = c(
+        "DR(0,0): Bias", "DR(0,0): SD",
+        "DR(0,1): Bias", "DR(0,1): SD",
+        "DR(1,0): Bias", "DR(1,0): SD",
+        "DR(1,1): Bias", "DR(1,1): SD"
+    )
+)
+```
